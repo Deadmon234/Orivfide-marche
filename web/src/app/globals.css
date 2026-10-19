@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --orivfide-red: #c41230;
+  --orivfide-red-dark: #b21f24;
+  --orivfide-card: #f7f2f0;
+  --orivfide-muted: #6b7280;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-orivfide-red: var(--orivfide-red);
+  --color-orivfide-red-dark: var(--orivfide-red-dark);
+  --color-orivfide-card: var(--orivfide-card);
+  --color-orivfide-muted: var(--orivfide-muted);
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-playfair);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+.font-serif {
+  font-family: var(--font-playfair), Georgia, serif;
+}
