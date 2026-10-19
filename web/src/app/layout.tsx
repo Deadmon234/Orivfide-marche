@@ -13,9 +13,9 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: "ORIVFIDE — Le marché, en un seul endroit",
+  title: "ORIVFIDE — Le projet de marketplace",
   description:
-    "La plateforme e-commerce qui connecte fournisseurs, revendeurs et acheteurs — partout au Cameroun.",
+    "Découvrez le projet ORIVFIDE, une marketplace imaginée pour réunir acheteurs, revendeurs et fournisseurs autour de sept univers de produits.",
   icons: {
     icon: "/orivfide-logo.jpeg",
   },

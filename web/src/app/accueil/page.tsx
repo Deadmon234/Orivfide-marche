@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { OrivfideLogo } from "@/components/OrivfideLogo";
+import { PlatformFooter } from "@/components/PlatformFooter";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
 import { markets } from "@/data/markets";
 
@@ -24,9 +25,9 @@ const productHighlights = [
 ];
 
 export const metadata: Metadata = {
-  title: "ORIVFIDE — Le commerce s'ouvre à vous",
+  title: "ORIVFIDE — Le commerce, à votre façon",
   description:
-    "Découvrez ORIVFIDE, la marketplace qui rapproche acheteurs, revendeurs et fournisseurs autour de sept univers de produits.",
+    "Découvrez le projet ORIVFIDE, une marketplace imaginée pour réunir acheteurs, revendeurs et fournisseurs autour de sept univers de produits.",
 };
 
 export default function AccueilPage() {
@@ -66,8 +67,8 @@ export default function AccueilPage() {
               Le marché s&apos;ouvre à <span className="text-orivfide-red">vous.</span>
             </h1>
             <p className="mt-7 max-w-xl text-lg leading-8 text-[#65595a]">
-              Découvrez ORIVFIDE : une marketplace pensée pour rapprocher acheteurs,
-              revendeurs et fournisseurs, dans un même espace.
+              Découvrez le projet ORIVFIDE : une marketplace imaginée pour rapprocher
+              acheteurs, revendeurs et fournisseurs dans un même espace.
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <a className="home-button-primary" href="#univers">
@@ -83,6 +84,10 @@ export default function AccueilPage() {
               </span>
               Une ambition née au Cameroun, tournée vers tous
             </div>
+            <p className="mt-4 max-w-xl text-xs leading-5 text-[#706566]">
+              Cette page présente le concept : le catalogue et la commande en ligne
+              ne sont pas encore proposés sur ce site.
+            </p>
           </div>
 
           <div className="home-hero-gallery" aria-label="Aperçu des univers de produits ORIVFIDE">
@@ -219,8 +224,8 @@ export default function AccueilPage() {
                 <p className="home-eyebrow">Une seule destination</p>
                 <h2 className="home-section-title">Sept univers. De nouvelles découvertes.</h2>
                 <p className="mt-4 text-base leading-7 text-[#706566]">
-                  De la technologie au quotidien, parcourez les catégories proposées
-                  par les fournisseurs partenaires.
+                  De la technologie au quotidien, découvrez les catégories envisagées
+                  pour l’offre ORIVFIDE.
                 </p>
               </div>
               <Link className="home-text-link shrink-0" href="/#offre">
@@ -259,6 +264,10 @@ export default function AccueilPage() {
                 </Link>
               ))}
             </div>
+            <p className="mt-5 text-center text-xs leading-5 text-[#706566]">
+              Les images sont illustratives et ne représentent pas des produits actuellement
+              disponibles à la vente.
+            </p>
           </div>
         </section>
       </RevealOnScroll>
@@ -288,17 +297,7 @@ export default function AccueilPage() {
         </section>
       </RevealOnScroll>
 
-      <footer className="border-t border-black/5 px-5 py-8 sm:px-8">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <OrivfideLogo />
-          <p className="text-sm text-[#706566]">
-            ORIVFIDE — Le marché, en un seul endroit.
-          </p>
-          <Link className="home-footer-link" href="/">
-            Découvrir le concept <ArrowUpRight aria-hidden="true" size={15} />
-          </Link>
-        </div>
-      </footer>
+      <PlatformFooter />
     </main>
   );
 }
