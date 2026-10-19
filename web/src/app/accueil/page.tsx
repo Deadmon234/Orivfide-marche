@@ -48,6 +48,9 @@ export default function AccueilPage() {
             <a className="home-nav-link" href="#vision">
               Notre vision
             </a>
+            <Link className="home-nav-link" href="/vendeur/inscription">
+              Vendre sur ORIVFIDE
+            </Link>
           </nav>
           <Link className="home-nav-cta" href="/#offre">
             Explorer ORIVFIDE <ArrowUpRight aria-hidden="true" size={16} />
@@ -77,6 +80,9 @@ export default function AccueilPage() {
               <a className="home-button-secondary" href="#acteurs">
                 Comment ça fonctionne ?
               </a>
+              <Link className="home-button-secondary" href="/vendeur/inscription">
+                Créer ma boutique <Store aria-hidden="true" size={17} />
+              </Link>
             </div>
             <div className="mt-10 flex items-center gap-3 text-sm text-[#706566]">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-orivfide-red shadow-sm">

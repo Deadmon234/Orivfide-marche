@@ -73,6 +73,9 @@ export default function PresentationPage() {
             <a className="transition hover:text-orivfide-red" href="#publics">
               Pour qui ?
             </a>
+            <Link className="transition hover:text-orivfide-red" href="/vendeur/inscription">
+              Espace vendeur
+            </Link>
           </nav>
           <Link
             className="inline-flex items-center gap-2 rounded-full bg-orivfide-red px-5 py-3 text-sm font-semibold text-white transition hover:bg-orivfide-red-dark"
@@ -105,6 +108,12 @@ export default function PresentationPage() {
               >
                 Découvrir les marchés <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </a>
+              <Link
+                className="mt-9 inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                href="/vendeur/inscription"
+              >
+                Créer ma boutique <Store className="h-4 w-4" aria-hidden="true" />
+              </Link>
             </div>
             <div className="grid grid-cols-3 gap-5 border-t border-white/20 pt-6 lg:min-w-[350px] lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
               {[
