@@ -29,7 +29,7 @@ export function PresentationShell({
       >
         <div>
           <OrivfideLogo variant={dark ? "light" : "dark"} />
-          <p className="mt-1 text-xs">ORIVFIDE — Présentation du projet</p>
+          <p className="mt-1 text-xs">ORIVFIDE — Le marché, en un seul endroit.</p>
         </div>
       </footer>
     </section>
