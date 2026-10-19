@@ -29,3 +29,199 @@ body {
 .font-serif {
   font-family: var(--font-playfair), Georgia, serif;
 }
+
+section[id] {
+  scroll-margin-top: 5rem;
+}
+
+header nav a {
+  position: relative;
+  transition: color 180ms ease;
+}
+
+header nav a::after {
+  position: absolute;
+  right: 0;
+  bottom: -0.35rem;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: white;
+  content: "";
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 180ms ease;
+}
+
+header nav a:hover::after,
+header nav a:focus-visible::after {
+  transform: scaleX(1);
+}
+
+header nav a:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 6px;
+}
+
+.hero-content > * {
+  animation: hero-enter 650ms both;
+}
+
+.hero-content > :nth-child(2) {
+  animation-delay: 90ms;
+}
+
+.hero-content > :nth-child(3) {
+  animation-delay: 180ms;
+}
+
+.hero-content > :nth-child(4) {
+  animation-delay: 270ms;
+}
+
+.hero-content > :nth-child(4) > * {
+  animation: hero-enter 650ms both;
+}
+
+.hero-content > :nth-child(4) > :nth-child(2) {
+  animation-delay: 100ms;
+}
+
+.hero-content > :nth-child(4) > :nth-child(3) {
+  animation-delay: 200ms;
+}
+
+.scroll-reveal-ready:not(.scroll-reveal-visible) {
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+.scroll-reveal {
+  transition:
+    opacity 650ms ease,
+    transform 650ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.scroll-reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+section article,
+.market-card {
+  transition:
+    transform 220ms ease,
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+}
+
+section article:hover,
+section article:focus-within,
+.market-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 30px rgb(40 14 19 / 10%);
+}
+
+.market-card:hover {
+  box-shadow: 0 12px 24px rgb(40 14 19 / 9%);
+}
+
+.market-carousel {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  border-radius: 0.75rem;
+  background: #e8dfdc;
+  isolation: isolate;
+}
+
+.market-slide {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  animation: market-slide-cycle 12s infinite;
+}
+
+.market-slide:nth-child(1) {
+  opacity: 1;
+  animation-delay: 0s;
+}
+
+.market-slide:nth-child(2) {
+  animation-delay: -4s;
+}
+
+.market-slide:nth-child(3) {
+  animation-delay: -8s;
+}
+
+.market-slide-caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 1.75rem 0.875rem 0.75rem;
+  background: linear-gradient(transparent, rgb(20 12 12 / 70%));
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 50%);
+}
+
+.market-carousel:hover .market-slide,
+.market-carousel:focus-within .market-slide {
+  animation-play-state: paused;
+}
+
+@keyframes hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes market-slide-cycle {
+  0%,
+  27%,
+  100% {
+    opacity: 1;
+  }
+
+  33%,
+  94% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .scroll-reveal-ready:not(.scroll-reveal-visible) {
+    opacity: 1;
+    transform: none;
+  }
+
+  .market-slide {
+    display: none;
+    animation: none;
+    opacity: 0;
+  }
+
+  .market-slide:first-child {
+    display: block;
+    opacity: 1;
+  }
+}

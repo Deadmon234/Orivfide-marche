@@ -23,7 +23,9 @@ import {
   Users,
 } from "lucide-react";
 import { OrivfideLogo } from "@/components/OrivfideLogo";
+import { MarketProductCarousel } from "@/components/MarketProductCarousel";
 import { PresentationShell } from "@/components/PresentationShell";
+import { RevealOnScroll } from "@/components/RevealOnScroll";
 import { SectionHeader } from "@/components/SectionHeader";
 
 const navLinks = [
@@ -35,13 +37,69 @@ const navLinks = [
 ];
 
 const markets = [
-  { label: "Électronique", icon: Monitor },
-  { label: "Électroménager", icon: Refrigerator },
-  { label: "Chaussures", icon: Footprints },
-  { label: "Mode", icon: Shirt },
-  { label: "Linge", icon: BedDouble },
-  { label: "Bureautique", icon: BriefcaseBusiness },
-  { label: "Cosmétique", icon: SprayCan },
+  {
+    label: "Électronique",
+    icon: Monitor,
+    slides: [
+      { src: "/markets/electronics-phone.jpg", label: "Téléphones" },
+      { src: "/markets/electronics-laptop.jpg", label: "Ordinateurs portables" },
+      { src: "/markets/electronics-headphones.jpg", label: "Audio et accessoires" },
+    ],
+  },
+  {
+    label: "Électroménager",
+    icon: Refrigerator,
+    slides: [
+      { src: "/markets/appliances-fridge.jpg", label: "Réfrigérateurs" },
+      { src: "/markets/appliances-microwave.jpg", label: "Fours micro-ondes" },
+      { src: "/markets/appliances-blender.jpg", label: "Petits appareils de cuisine" },
+    ],
+  },
+  {
+    label: "Chaussures",
+    icon: Footprints,
+    slides: [
+      { src: "/markets/shoes-sneakers.jpg", label: "Baskets" },
+      { src: "/markets/shoes-heels.jpg", label: "Chaussures de ville" },
+      { src: "/markets/shoes-sport.jpg", label: "Chaussures de sport" },
+    ],
+  },
+  {
+    label: "Mode",
+    icon: Shirt,
+    slides: [
+      { src: "/markets/fashion-shopping.jpg", label: "Mode et habillement" },
+      { src: "/markets/fashion-shirt.jpg", label: "Vêtements" },
+      { src: "/markets/fashion-bag.jpg", label: "Sacs et accessoires" },
+    ],
+  },
+  {
+    label: "Linge",
+    icon: BedDouble,
+    slides: [
+      { src: "/markets/home-linen-bedroom.jpg", label: "Linge de lit" },
+      { src: "/markets/home-linen-towels.jpg", label: "Textiles et linge de maison" },
+      { src: "/markets/home-linen-bed.jpg", label: "Décoration et textiles" },
+    ],
+  },
+  {
+    label: "Bureautique",
+    icon: BriefcaseBusiness,
+    slides: [
+      { src: "/markets/office-desk.jpg", label: "Équipement de bureau" },
+      { src: "/markets/office-writing.jpg", label: "Fournitures de bureau" },
+      { src: "/markets/office-supplies.jpg", label: "Papeterie et fournitures" },
+    ],
+  },
+  {
+    label: "Cosmétique",
+    icon: SprayCan,
+    slides: [
+      { src: "/markets/beauty-cosmetics.jpg", label: "Maquillage" },
+      { src: "/markets/beauty-perfume.jpg", label: "Parfums" },
+      { src: "/markets/beauty-skincare.jpg", label: "Soins de beauté" },
+    ],
+  },
 ];
 
 export default function Home() {
@@ -52,7 +110,7 @@ export default function Home() {
           <OrivfideLogo variant="light" className="scale-90" />
           <nav className="hidden gap-6 text-sm font-medium text-white/90 md:flex">
             {navLinks.map((link) => (
-              <a key={link.href} href={link.href} className="hover:text-white">
+              <a key={link.href} href={link.href}>
                 {link.label}
               </a>
             ))}
@@ -61,8 +119,8 @@ export default function Home() {
       </header>
 
       {/* Slide 1 — Hero */}
-      <section className="flex min-h-screen flex-col justify-center bg-orivfide-red-dark px-6 pb-16 pt-24 text-white md:px-12 lg:px-20">
-        <div className="mx-auto w-full max-w-6xl">
+      <section className="hero-section flex min-h-screen flex-col justify-center bg-orivfide-red-dark px-6 pb-16 pt-24 text-white md:px-12 lg:px-20">
+        <div className="hero-content mx-auto w-full max-w-6xl">
           <p className="mb-10 text-xs font-medium uppercase tracking-[0.3em] text-white/80">
             Présentation du projet
           </p>
@@ -407,23 +465,40 @@ export default function Home() {
 
       {/* Slide 9 — Offre */}
       <PresentationShell id="offre" className="bg-zinc-50">
-        <SectionHeader label="L'offre" title="7 marchés, une seule plateforme" />
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-          {markets.map(({ label, icon: Icon }) => (
+        <SectionHeader
+          label="L'offre"
+          title="7 marchés, une seule plateforme"
+          description="Parcourez les univers de produits proposés sur la plateforme."
+        />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {markets.map(({ label, icon: Icon, slides }) => (
             <div
               key={label}
-              className="flex aspect-[4/3] flex-col items-center justify-center gap-4 rounded-2xl bg-orivfide-card p-4 text-center"
+              className="market-card rounded-2xl bg-orivfide-card p-4"
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-orivfide-red text-white">
-                <Icon className="h-6 w-6" />
-              </span>
-              <span className="font-serif text-lg font-bold">{label}</span>
+              <div className="mb-4 flex items-center gap-3 px-1">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-orivfide-red text-white">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <h3 className="font-serif text-lg font-bold">{label}</h3>
+              </div>
+              <MarketProductCarousel market={label} slides={slides} />
             </div>
           ))}
-          <div className="flex aspect-[4/3] items-center justify-center rounded-2xl border-2 border-dashed border-orivfide-red/30 p-4 text-center">
-            <span className="font-serif text-lg font-bold text-orivfide-red">+ à venir</span>
+          <div className="flex min-h-56 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-orivfide-red/30 p-6 text-center">
+            <span className="font-serif text-3xl font-bold text-orivfide-red">+</span>
+            <span className="mt-2 font-serif text-lg font-bold text-orivfide-red">
+              D&apos;autres marchés à venir
+            </span>
+            <p className="mt-2 text-sm leading-relaxed text-orivfide-muted">
+              De nouvelles catégories pourront s&apos;ajouter selon les besoins des clients.
+            </p>
           </div>
         </div>
+        <p className="mt-5 text-center text-xs italic text-orivfide-muted">
+          Visuels illustratifs : le catalogue évolue selon les produits proposés par les fournisseurs
+          partenaires.
+        </p>
       </PresentationShell>
 
       {/* Slide 10 — Logistique */}
@@ -747,7 +822,7 @@ export default function Home() {
         id="resume"
         className="flex min-h-screen flex-col justify-center bg-orivfide-red-dark px-6 py-20 text-white md:px-12 lg:px-20"
       >
-        <div className="mx-auto w-full max-w-6xl">
+        <RevealOnScroll className="mx-auto w-full max-w-6xl">
           <div className="flex items-center gap-4">
             <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-orivfide-red">
               <Rocket className="h-7 w-7" />
@@ -780,7 +855,7 @@ export default function Home() {
           <div className="mt-16">
             <OrivfideLogo variant="light" />
           </div>
-        </div>
+        </RevealOnScroll>
       </section>
     </>
   );
