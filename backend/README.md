@@ -1,6 +1,6 @@
 # ORIVFIDE Backend API
 
-Standalone Node.js, TypeScript, Express REST API for seller accounts, seller workspaces, and public-test stores. It lives beside `web/` and does not modify or serve the Next.js application.
+Standalone Node.js, TypeScript, Express REST API for seller accounts and stores. It lives beside `web/` and does not modify or serve the Next.js application.
 
 ## Local setup
 
@@ -42,23 +42,23 @@ Required environment variables are checked at startup. Invalid or missing values
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL/Neon connection URL; use the pooled Neon URL for deployed services. |
 | `JWT_SECRET` | Yes | At least 32 characters; use a unique, cryptographically random value per environment. |
+| `ADMIN_API_KEY` | For admin actions | At least 32 random characters; configure the same value only in the backend and enter it at `/admin/connexion`. |
 | `NODE_ENV` | No | `development`, `test`, or `production`. |
 | `PORT` | No | HTTP port, default `4000`. |
 | `DATABASE_SSL` | No | Defaults to `true`; set to `false` only for local PostgreSQL without TLS. |
 | `DATABASE_POOL_MAX` | No | PostgreSQL pool size, default `10`. |
 | `JWT_EXPIRES_IN` | No | Token expiry such as `7d` or `15m`, default `7d`. |
 | `CORS_ORIGINS` | No | Comma-separated exact browser origins; defaults to `http://localhost:3000`. Wildcards are rejected. |
-| `CONTRACT_DRAFT_VERSION` | No | Version recorded with each draft acknowledgement. |
 
-For a deployment, configure the variables in the hosting provider's secret/environment settings, install dependencies with `npm ci`, run `npm run build`, apply `npm run migrate` as a release step, and start with `npm start`. Point the web app's `BACKEND_API_URL` to this service and configure its exact browser origin in `CORS_ORIGINS`. The API uses Helmet, a 32 KB JSON body limit, HTTPS-only product image URLs, parameterized SQL, bcrypt password hashes, HS256 bearer tokens, and an in-memory rate limit on registration/login (use a shared rate-limit store when running multiple replicas). It handles `SIGINT` and `SIGTERM` by closing the HTTP server and PostgreSQL pool.
+For Railway, set the service root directory to `/backend`. The checked-in `railway.json` configures the build, runs `npm run migrate` before deployment, starts the API with `npm start`, and checks `/health`. Set `DATABASE_URL`, `JWT_SECRET`, `ADMIN_API_KEY`, and `CORS_ORIGINS` in Railway's service variables; let Railway provide `PORT`. Point the web app's `BACKEND_API_URL` to the generated public service domain. For other providers, install dependencies with `npm ci`, run `npm run build`, apply `npm run migrate` as a release step, and start with `npm start`. The API uses Helmet, a 32 KB JSON body limit, HTTPS-only product image URLs, parameterized SQL, bcrypt password hashes, HS256 bearer tokens, and in-memory rate limits (use a shared rate-limit store when running multiple replicas). It handles `SIGINT` and `SIGTERM` by closing the HTTP server and PostgreSQL pool.
 
 Neon credentials are not included. The migration runner tracks applied SQL filenames in `schema_migrations` and runs migrations transactionally.
 
-## Seller and public-test behavior
+## Seller approval behavior
 
-Registration creates the seller and its initially private store in one PostgreSQL transaction. A seller must explicitly acknowledge the versioned **non-contractual draft** before the store is listed. As requested for the public test flow, acknowledgement changes the seller state to `draft_acknowledged` and sets `store.isPublic = true`; the acknowledgement response and every public-store response explicitly mark the store as a draft/public test. This endpoint is not a contract signature or approval of final commercial terms. Public pages expose only active products. No endpoint activates a seller or signs a final agreement.
+Registration creates a `pending_review` seller and a private store in one PostgreSQL transaction. The seller can log in to view the review status, but cannot manage products. An administrator approves or rejects the request at `/admin/vendeurs`; approval activates the seller and publishes the store, while rejection keeps it private and records a reason. Only approved sellers and active products are exposed publicly. Contract signing is intentionally not part of this flow while ORIVFIDE finalizes its agreement.
 
-All seller dashboard, acknowledgement, create-product, and update-product operations derive the seller identity from the verified bearer token and constrain database access to that seller's own store/products.
+Seller dashboard, product creation, and product updates derive seller identity from a verified bearer token and constrain access to that seller's own store/products. Admin endpoints require `x-admin-key` matching `ADMIN_API_KEY`; the frontend stores that key in an HTTP-only, eight-hour cookie after successful verification.
 
 ## API contracts
 
@@ -79,7 +79,7 @@ Request:
 }
 ```
 
-Returns `201` with `{ "token": "...", "seller": { "id", "fullName", "email", "status", "createdAt" }, "store": { "id", "name", "slug", "description", "category", "phone", "isPublic", "createdAt" } }`. New accounts are `contract_pending`; the store starts with `isPublic: false`.
+Returns `201` with `{ "token": "...", "seller": { "id", "fullName", "email", "status", "rejectionReason", "createdAt" }, "store": { "id", "name", "slug", "description", "category", "phone", "isPublic", "createdAt" } }`. New accounts are `pending_review`; the store starts with `isPublic: false`.
 
 ### `POST /api/auth/login`
 
@@ -89,20 +89,14 @@ Request `{ "email": "amina@example.com", "password": "..." }`. Returns `200` wit
 
 Requires `Authorization: Bearer <token>`. Returns `{ "seller": ..., "store": ..., "products": [...] }`. Product entries contain `id`, `name`, `description`, integer `price`, nullable `imageUrl`, `isActive`, and ISO `createdAt`.
 
-### `POST /api/seller/contract-acknowledgement`
+### Administrator endpoints
 
-Requires a bearer token. Request `{ "signerName": "Amina Example", "acknowledge": true }`. `acknowledge` must be exactly `true`. Returns `200`:
+Send `x-admin-key: <ADMIN_API_KEY>` on each request.
 
-```json
-{
-  "seller": { "id": "...", "fullName": "Amina Example", "email": "amina@example.com", "status": "draft_acknowledged", "createdAt": "..." },
-  "store": { "id": "...", "name": "Maison Amina", "slug": "maison-amina-...", "description": "", "category": "Mode et accessoires", "phone": "+237600000000", "isPublic": true, "createdAt": "..." },
-  "acknowledgement": { "version": "orivfide-seller-draft-v1", "signerName": "Amina Example", "acknowledgedAt": "...", "isDraftAcknowledgement": true },
-  "isDraftAgreement": true,
-  "publicTestStore": true,
-  "status": "draft_acknowledged_public_test"
-}
-```
+- `GET /api/admin/verify` verifies the key.
+- `GET /api/admin/sellers` lists pending and previously rejected requests.
+- `POST /api/admin/sellers/:id/approve` approves the seller and publishes the store.
+- `POST /api/admin/sellers/:id/reject` requires `{ "reason": "..." }`, keeps the store private, and allows a later admin re-review.
 
 ### `POST /api/seller/products`
 
@@ -114,17 +108,7 @@ Bearer token required. Request `{ "isActive": false }` or `{ "isActive": true }`
 
 ### `GET /api/public/stores/:slug`
 
-No token required. Only returns a store whose `is_public` is true, and only active products. The response prominently includes:
-
-```json
-{
-  "isDraftAgreement": true,
-  "publicTestStore": true,
-  "status": "draft_public_test",
-  "store": { "..." : "..." },
-  "products": []
-}
-```
+No token required. Only returns an approved seller's public store and active products, with `{ "store": ..., "products": [...] }`.
 
 ### `GET /health`
 

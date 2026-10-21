@@ -11,7 +11,7 @@ export function ProductForm() {
 
   return (
     <form action={formAction} className="grid gap-4 rounded-2xl border border-black/5 bg-white p-5 sm:grid-cols-2 sm:p-6">
-      <h2 className="font-serif text-xl font-bold sm:col-span-2">Ajouter un produit de test</h2>
+      <h2 className="font-serif text-xl font-bold sm:col-span-2">Ajouter un produit</h2>
       <label className="seller-field">
         Nom du produit
         <input name="name" required minLength={2} maxLength={120} />

@@ -12,8 +12,8 @@ const envSchema = z.object({
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must contain at least 32 characters"),
   JWT_EXPIRES_IN: z.string().regex(/^\d+[smhd]$/, "JWT_EXPIRES_IN must look like 15m or 7d").default("7d"),
+  ADMIN_API_KEY: z.string().min(32, "ADMIN_API_KEY must contain at least 32 characters").optional(),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
-  CONTRACT_DRAFT_VERSION: z.string().trim().min(1).max(100).default("orivfide-seller-draft-v1"),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -17,6 +17,6 @@ Le site est disponible sur [http://localhost:3000](http://localhost:3000).
 
 ## Déploiement
 
-Déployer `web` comme projet Next.js avec `web` pour répertoire racine dans Vercel. Définir `BACKEND_API_URL` avec l’URL HTTPS du backend Node.js déployé. Le navigateur utilise des Server Actions Next.js et des cookies `HttpOnly`; les appels au backend sont donc exécutés côté serveur.
+Déployer `web` comme projet Next.js avec `web` pour répertoire racine dans Vercel. Définir `BACKEND_API_URL` avec l’URL HTTPS du backend Node.js déployé. Le navigateur utilise des Server Actions Next.js et des cookies `HttpOnly`; les appels au backend sont donc exécutés côté serveur. Pour administrer les demandes, ouvrir `/admin/connexion` : la clé doit être définie comme `ADMIN_API_KEY` dans les variables du backend Railway.
 
-Les boutiques dont le vendeur a confirmé le brouillon apparaissent en mode test avec un avertissement public. Le brouillon n’est pas le contrat définitif ORIVFIDE.
+Les inscriptions vendeurs restent en attente et privées jusqu’à leur approbation dans `/admin/vendeurs`. Le parcours de signature du contrat est suspendu jusqu’à la finalisation du contrat ORIVFIDE.

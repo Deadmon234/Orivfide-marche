@@ -24,7 +24,7 @@ export default function SellerRegistrationPage() {
   return (
     <SellerAuthLayout variant="register">
       <div className="seller-auth-heading">
-        <span className="seller-auth-step">ESPACE VENDEUR <span /> ÉTAPE 1 SUR 2</span>
+        <span className="seller-auth-step">ESPACE VENDEUR <span /> DEMANDE DE CRÉATION</span>
         <h1>Créez votre boutique</h1>
         <p>Un compte pour vous, une vitrine pour vos produits. Commençons par les informations essentielles.</p>
       </div>
@@ -119,7 +119,7 @@ export default function SellerRegistrationPage() {
         )}
 
         <button type="submit" disabled={pending} className="seller-auth-submit">
-          {pending ? "Création de votre espace…" : "Créer mon compte et ma boutique"}
+          {pending ? "Envoi de votre demande…" : "Envoyer ma demande"}
           {!pending && <ArrowRight className="h-[1.1rem] w-[1.1rem]" aria-hidden="true" />}
         </button>
       </form>
@@ -131,7 +131,7 @@ export default function SellerRegistrationPage() {
 
       <p className="seller-auth-draft-note">
         <LockKeyhole className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span>Votre boutique sera présentée en <strong>mode test public</strong> après lecture du brouillon vendeur. Ce brouillon n’est pas le contrat définitif ORIVFIDE.</span>
+        <span>Votre boutique restera privée jusqu’à la <strong>validation de votre compte par ORIVFIDE</strong>. Vous pourrez accéder à votre espace vendeur après approbation.</span>
       </p>
     </SellerAuthLayout>
   );

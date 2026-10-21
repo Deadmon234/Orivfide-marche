@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -9,9 +9,9 @@ import { inTransaction, pool, queryOne } from "./db.js";
 import { HttpError } from "./errors.js";
 import {
   createProductSchema,
-  draftAcknowledgementSchema,
   loginSchema,
   registerSchema,
+  sellerRejectionSchema,
   updateProductSchema,
 } from "./schemas.js";
 
@@ -20,7 +20,8 @@ type SellerRow = {
   full_name: string;
   email: string;
   password_hash: string;
-  status: "contract_pending" | "draft_acknowledged" | "active";
+  status: "pending_review" | "active" | "rejected";
+  rejection_reason: string | null;
   created_at: Date;
 };
 
@@ -55,6 +56,30 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many authentication attempts. Try again later." },
 });
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many administrator authentication attempts. Try again later." },
+});
+
+function requireAdmin(request: Request, _response: Response, next: NextFunction) {
+  const expected = config.ADMIN_API_KEY;
+  const provided = request.header("x-admin-key");
+  if (!expected) {
+    next(new HttpError(503, "Administrator access is not configured."));
+    return;
+  }
+  const expectedBytes = Buffer.from(expected);
+  const providedBytes = provided ? Buffer.from(provided) : Buffer.alloc(0);
+  if (providedBytes.length !== expectedBytes.length
+    || !timingSafeEqual(providedBytes, expectedBytes)) {
+    next(new HttpError(401, "Administrator credentials are invalid."));
+    return;
+  }
+  next();
+}
 
 function asyncHandler(
   handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown>,
@@ -78,6 +103,7 @@ function publicSeller(row: SellerRow) {
     fullName: row.full_name,
     email: row.email,
     status: row.status,
+    rejectionReason: row.rejection_reason,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -128,7 +154,7 @@ function storeSlug(name: string): string {
 async function sellerAndStore(sellerId: string) {
   const [seller, store] = await Promise.all([
     queryOne<SellerRow>(
-      `SELECT id, full_name, email, password_hash, status, created_at FROM sellers WHERE id = $1`,
+      `SELECT id, full_name, email, password_hash, status, rejection_reason, created_at FROM sellers WHERE id = $1`,
       [sellerId],
     ),
     queryOne<StoreRow>(
@@ -148,7 +174,7 @@ router.post("/auth/register", authLimiter, asyncHandler(async (request, response
       const sellerResult = await client.query<SellerRow>(
         `INSERT INTO sellers (email, full_name, password_hash)
          VALUES ($1, $2, $3)
-         RETURNING id, full_name, email, password_hash, status, created_at`,
+         RETURNING id, full_name, email, password_hash, status, rejection_reason, created_at`,
         [input.email, input.fullName, passwordHash],
       );
       const seller = sellerResult.rows[0]!;
@@ -173,7 +199,7 @@ router.post("/auth/register", authLimiter, asyncHandler(async (request, response
 router.post("/auth/login", authLimiter, asyncHandler(async (request, response) => {
   const input = validate(loginSchema, request.body);
   const seller = await queryOne<SellerRow>(
-    `SELECT id, full_name, email, password_hash, status, created_at FROM sellers WHERE email = $1`,
+    `SELECT id, full_name, email, password_hash, status, rejection_reason, created_at FROM sellers WHERE email = $1`,
     [input.email],
   );
   if (!seller || !(await bcrypt.compare(input.password, seller.password_hash))) {
@@ -205,65 +231,72 @@ router.get("/seller/dashboard", requireSeller, asyncHandler(async (request, resp
   });
 }));
 
-router.post("/seller/contract-acknowledgement", requireSeller, asyncHandler(async (request, response) => {
-  const input = validate(draftAcknowledgementSchema, request.body);
-  const result = await inTransaction(async (client) => {
-    const sellerResult = await client.query<SellerRow>(
-      `SELECT id, full_name, email, password_hash, status, created_at FROM sellers WHERE id = $1 FOR UPDATE`,
-      [request.sellerId],
-    );
-    const seller = sellerResult.rows[0];
-    if (!seller) throw new HttpError(404, "Seller account not found.");
-    const normalizedSigner = input.signerName.normalize("NFKC").trim().toLocaleLowerCase();
-    const normalizedOwner = seller.full_name.normalize("NFKC").trim().toLocaleLowerCase();
-    if (normalizedSigner !== normalizedOwner) {
-      throw new HttpError(400, "The draft acknowledgement name must match the seller account.");
-    }
-    if (seller.status === "active") {
-      throw new HttpError(409, "The final agreement workflow is separate from draft acknowledgement.");
-    }
+router.get("/admin/verify", adminLimiter, requireAdmin, (_request, response) => {
+  response.json({ authenticated: true });
+});
 
-    if (seller.status === "contract_pending") {
-      await client.query(
-        `INSERT INTO contract_acceptances (seller_id, version, signer_name, is_draft_acknowledgement)
-         VALUES ($1, $2, $3, true)`,
-        [seller.id, config.CONTRACT_DRAFT_VERSION, input.signerName],
-      );
-      await client.query(`UPDATE sellers SET status = 'draft_acknowledged' WHERE id = $1`, [seller.id]);
-    } else {
-      const existing = await client.query(
-        `SELECT 1 FROM contract_acceptances
-          WHERE seller_id = $1 AND is_draft_acknowledgement = true`,
-        [seller.id],
-      );
-      if (existing.rowCount !== 1) throw new HttpError(409, "No valid draft acknowledgement is recorded.");
-    }
-
-    const storeResult = await client.query<StoreRow>(
-      `UPDATE stores SET is_public = true WHERE seller_id = $1
-       RETURNING id, seller_id, name, slug, description, category, phone, is_public, created_at`,
-      [seller.id],
-    );
-    const acceptanceResult = await client.query<{ version: string; signer_name: string; accepted_at: Date }>(
-      `SELECT version, signer_name, accepted_at FROM contract_acceptances WHERE seller_id = $1`,
-      [seller.id],
-    );
-    return { seller: { ...seller, status: "draft_acknowledged" as const }, store: storeResult.rows[0], acceptance: acceptanceResult.rows[0] };
-  });
-  if (!result.store || !result.acceptance) throw new HttpError(500, "Draft acknowledgement could not be recorded.");
+router.get("/admin/sellers", requireAdmin, asyncHandler(async (_request, response) => {
+  const result = await pool.query(
+    `SELECT s.id, s.full_name, s.email, s.status, s.rejection_reason, s.created_at,
+            st.id AS store_id, st.name AS store_name, st.slug AS store_slug,
+            st.category AS store_category, st.phone AS store_phone
+       FROM sellers s
+       JOIN stores st ON st.seller_id = s.id
+      WHERE s.status IN ('pending_review', 'rejected')
+      ORDER BY s.created_at ASC`,
+  );
   response.json({
-    seller: publicSeller(result.seller),
-    store: publicStore(result.store),
-    acknowledgement: {
-      version: result.acceptance.version,
-      signerName: result.acceptance.signer_name,
-      acknowledgedAt: result.acceptance.accepted_at.toISOString(),
-      isDraftAcknowledgement: true,
-    },
-    isDraftAgreement: true,
-    publicTestStore: true,
-    status: "draft_acknowledged_public_test",
+    sellers: result.rows.map((row) => ({
+      id: row.id,
+      fullName: row.full_name,
+      email: row.email,
+      status: row.status,
+      rejectionReason: row.rejection_reason,
+      createdAt: row.created_at.toISOString(),
+      store: {
+        id: row.store_id,
+        name: row.store_name,
+        slug: row.store_slug,
+        category: row.store_category,
+        phone: row.store_phone,
+      },
+    })),
   });
+}));
+
+router.post("/admin/sellers/:id/approve", requireAdmin, asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const result = await inTransaction(async (client) => {
+    const seller = await client.query(
+      `UPDATE sellers SET status = 'active', rejection_reason = NULL
+        WHERE id = $1 AND status IN ('pending_review', 'rejected')
+        RETURNING id`,
+      [id],
+    );
+    if (seller.rowCount !== 1) return false;
+    await client.query("UPDATE stores SET is_public = true WHERE seller_id = $1", [id]);
+    return true;
+  });
+  if (!result) throw new HttpError(404, "Pending seller account not found.");
+  response.json({ status: "active" });
+}));
+
+router.post("/admin/sellers/:id/reject", requireAdmin, asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const { reason } = validate(sellerRejectionSchema, request.body);
+  const result = await inTransaction(async (client) => {
+    const seller = await client.query(
+      `UPDATE sellers SET status = 'rejected', rejection_reason = $2
+        WHERE id = $1 AND status IN ('pending_review', 'rejected')
+        RETURNING id`,
+      [id, reason],
+    );
+    if (seller.rowCount !== 1) return false;
+    await client.query("UPDATE stores SET is_public = false WHERE seller_id = $1", [id]);
+    return true;
+  });
+  if (!result) throw new HttpError(404, "Pending seller account not found.");
+  response.json({ status: "rejected" });
 }));
 
 router.post("/seller/products", requireSeller, asyncHandler(async (request, response) => {
@@ -276,8 +309,8 @@ router.post("/seller/products", requireSeller, asyncHandler(async (request, resp
     [request.sellerId],
   );
   if (!store) throw new HttpError(404, "Seller store not found.");
-  if (store.status === "contract_pending") {
-    throw new HttpError(403, "Acknowledge the seller draft before adding products.");
+  if (store.status !== "active") {
+    throw new HttpError(403, "Your seller account must be approved before managing products.");
   }
   const inserted = await pool.query<ProductRow>(
     `INSERT INTO products (store_id, name, description, price, image_url)
@@ -297,7 +330,7 @@ router.patch("/seller/products/:id", requireSeller, asyncHandler(async (request,
       WHERE p.id = $2 AND p.store_id = st.id AND st.seller_id = $3
         AND EXISTS (
           SELECT 1 FROM sellers s
-           WHERE s.id = st.seller_id AND s.status <> 'contract_pending'
+           WHERE s.id = st.seller_id AND s.status = 'active'
         )
       RETURNING p.id, p.store_id, p.name, p.description, p.price, p.image_url, p.is_active, p.created_at`,
     [input.isActive, id, request.sellerId],
@@ -309,8 +342,9 @@ router.patch("/seller/products/:id", requireSeller, asyncHandler(async (request,
 router.get("/public/stores/:slug", asyncHandler(async (request, response) => {
   const { slug } = validate(z.object({ slug: z.string().min(1).max(120) }), request.params);
   const store = await queryOne<StoreRow>(
-    `SELECT id, seller_id, name, slug, description, category, phone, is_public, created_at
-       FROM stores WHERE slug = $1 AND is_public = true`,
+    `SELECT st.id, st.seller_id, st.name, st.slug, st.description, st.category, st.phone, st.is_public, st.created_at
+       FROM stores st JOIN sellers s ON s.id = st.seller_id
+      WHERE st.slug = $1 AND st.is_public = true AND s.status = 'active'`,
     [slug],
   );
   if (!store) throw new HttpError(404, "Public store not found.");
@@ -319,13 +353,7 @@ router.get("/public/stores/:slug", asyncHandler(async (request, response) => {
        FROM products WHERE store_id = $1 AND is_active = true ORDER BY created_at DESC`,
     [store.id],
   );
-  response.json({
-    isDraftAgreement: true,
-    publicTestStore: true,
-    status: "draft_public_test",
-    store: publicStorefront(store),
-    products: products.rows.map(publicProduct),
-  });
+  response.json({ store: publicStorefront(store), products: products.rows.map(publicProduct) });
 }));
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

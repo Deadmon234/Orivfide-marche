@@ -9,7 +9,7 @@ import {
   LogOut,
   Package,
   Settings2,
-  ShieldAlert,
+  ShieldCheck,
   Store,
 } from "lucide-react";
 import { getSellerDashboard } from "@/lib/seller-api";
@@ -29,7 +29,7 @@ export default async function SellerDashboardPage({
 }) {
   await connection();
   const { seller, store, products } = await getSellerDashboard();
-  if (seller.status === "contract_pending") redirect("/vendeur/contrat");
+  if (seller.status !== "active") redirect("/vendeur/statut");
   const params = await searchParams;
 
   return (
@@ -45,7 +45,7 @@ export default async function SellerDashboardPage({
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold">{store.name}</span>
-            <span className="mt-0.5 block text-xs text-white/55">Boutique de test visible</span>
+            <span className="mt-0.5 block text-xs text-white/55">Boutique approuvée</span>
           </span>
         </div>
         <nav aria-label="Navigation vendeur" className="mt-6 flex gap-2 overflow-x-auto lg:flex-col">
@@ -101,20 +101,19 @@ export default async function SellerDashboardPage({
             </p>
           </div>
 
-          <div className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
-            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div className="flex gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
             <div>
-              <p className="font-semibold">Boutique visible en mode test — contrat ORIVFIDE définitif en attente</p>
+              <p className="font-semibold">Votre boutique est validée et active</p>
               <p className="mt-1 text-sm leading-6">
-                Votre vitrine publique et les produits actifs sont visibles pour tester le parcours.
-                Le document accepté est un brouillon non contractuel, pas le contrat définitif d’ORIVFIDE.
+                Votre boutique est accessible au public. Ajoutez vos produits et gardez leurs informations à jour.
               </p>
             </div>
           </div>
 
           {params.produit === "ajoute" && (
             <p role="status" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              Le produit a été ajouté à votre boutique publique de test.
+              Le produit a été ajouté à votre boutique.
             </p>
           )}
 
@@ -122,7 +121,7 @@ export default async function SellerDashboardPage({
             {[
               { label: "Produits au catalogue", value: products.length, icon: Package },
               { label: "Produits actifs", value: products.filter((product) => product.isActive).length, icon: LayoutDashboard },
-              { label: "Statut de la boutique", value: "Publique · test", icon: Store },
+              { label: "Statut de la boutique", value: "Active", icon: Store },
             ].map(({ label, value, icon: Icon }) => (
               <article key={label} className="rounded-2xl border border-black/5 bg-white p-5">
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#fbebed] text-orivfide-red">
@@ -138,7 +137,7 @@ export default async function SellerDashboardPage({
             <div>
               <h2 className="font-serif text-2xl font-bold">Mes produits</h2>
               <p className="mt-1 text-sm text-orivfide-muted">
-                Les produits actifs apparaissent dans votre vitrine de test publique.
+                Les produits actifs apparaissent dans votre vitrine publique.
               </p>
             </div>
             <ProductForm />
@@ -176,7 +175,7 @@ export default async function SellerDashboardPage({
                         </p>
                       </div>
                       <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${product.isActive ? "bg-emerald-50 text-emerald-800" : "bg-zinc-100 text-zinc-600"}`}>
-                        {product.isActive ? "Actif · test public" : "Masqué"}
+                        {product.isActive ? "Actif · public" : "Masqué"}
                       </span>
                       <form action={toggleSellerProduct}>
                         <input type="hidden" name="productId" value={product.id} />
@@ -200,19 +199,15 @@ export default async function SellerDashboardPage({
                   {store.name} · {store.category}
                 </p>
                 <p className="mt-1 text-xs text-orivfide-muted">
-                  Adresse de test :{" "}
+                  Adresse publique :{" "}
                   <Link className="font-medium text-orivfide-red underline" href={`/boutique/${store.slug}`}>
                     /boutique/{store.slug}
                   </Link>
                 </p>
               </div>
-              <span className="inline-flex w-fit items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                <ShieldAlert className="h-4 w-4" aria-hidden="true" /> Test public
+              <span className="inline-flex w-fit items-center gap-2 rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
+                <ShieldCheck className="h-4 w-4" aria-hidden="true" /> Boutique active
               </span>
-            </div>
-            <div className="mt-5 rounded-xl bg-[#faf7f6] p-4 text-sm leading-6 text-orivfide-muted">
-              Cette vitrine de test est accessible au public après votre confirmation du brouillon.
-              Le contrat définitif ORIVFIDE devra être signé avant l’ouverture commerciale.
             </div>
             <Link href="/accueil" className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-orivfide-red">
               <ExternalLink className="h-4 w-4" aria-hidden="true" /> Revenir au site public

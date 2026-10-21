@@ -4,12 +4,14 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const sellerTokenCookieName = "orivfide_seller_token";
+const adminKeyCookieName = "orivfide_admin_key";
 
 export type SellerAccount = {
   id: string;
   fullName: string;
   email: string;
-  status: "contract_pending" | "draft_acknowledged" | "active";
+  status: "pending_review" | "active" | "rejected";
+  rejectionReason: string | null;
 };
 
 export type SellerStore = {
@@ -41,8 +43,22 @@ export type SellerDashboard = {
 export type PublicStore = {
   store: Omit<SellerStore, "phone">;
   products: SellerProduct[];
-  isDraftAgreement: boolean;
-  publicTestStore: boolean;
+};
+
+export type AdminSeller = {
+  id: string;
+  fullName: string;
+  email: string;
+  status: "pending_review" | "rejected";
+  rejectionReason: string | null;
+  createdAt: string;
+  store: {
+    id: string;
+    name: string;
+    slug: string;
+    category: string;
+    phone: string;
+  };
 };
 
 type ApiErrorBody = { error?: string; message?: string };
@@ -127,6 +143,38 @@ export async function publicSellerApi<T>(path: string): Promise<T> {
   return parseResponse<T>(response);
 }
 
+export async function requestAdmin<T>(path: string, key: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("x-admin-key", key);
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  let response: Response;
+  try {
+    response = await fetch(`${backendBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+    });
+  } catch (error) {
+    console.error("Admin API request failed", error);
+    throw new SellerApiError("Le service administrateur est momentanément indisponible.", 503);
+  }
+  return parseResponse<T>(response);
+}
+
+export async function adminApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const key = (await cookies()).get(adminKeyCookieName)?.value;
+  if (!key) redirect("/admin/connexion");
+  try {
+    return await requestAdmin<T>(path, key, init);
+  } catch (error) {
+    if (error instanceof SellerApiError && error.status === 401) {
+      await clearAdminKey();
+      redirect("/admin/connexion");
+    }
+    throw error;
+  }
+}
+
 export async function setSellerToken(token: string) {
   (await cookies()).set(sellerTokenCookieName, token, {
     httpOnly: true,
@@ -141,6 +189,30 @@ export async function clearSellerToken() {
   (await cookies()).delete(sellerTokenCookieName);
 }
 
+export async function setAdminKey(key: string) {
+  (await cookies()).set(adminKeyCookieName, key, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/admin",
+    maxAge: 60 * 60 * 8,
+  });
+}
+
+export async function clearAdminKey() {
+  (await cookies()).set(adminKeyCookieName, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/admin",
+    maxAge: 0,
+  });
+}
+
 export async function getSellerDashboard() {
   return sellerApi<SellerDashboard>("/api/seller/dashboard");
+}
+
+export async function getAdminSellers() {
+  return adminApi<{ sellers: AdminSeller[] }>("/api/admin/sellers");
 }

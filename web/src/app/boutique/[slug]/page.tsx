@@ -8,8 +8,8 @@ import { publicSellerApi, SellerApiError, type PublicStore } from "@/lib/seller-
 
 export const instant = false;
 export const metadata = {
-  title: "Boutique de test | ORIVFIDE",
-  robots: { index: false, follow: false },
+  title: "Boutique | ORIVFIDE",
+  robots: { index: true, follow: true },
 };
 
 export default async function PublicStorePage({
@@ -30,7 +30,7 @@ export default async function PublicStorePage({
     throw error;
   }
 
-  const { store, products, isDraftAgreement, publicTestStore } = result;
+  const { store, products } = result;
 
   return (
     <main className="min-h-screen bg-[#faf7f6] text-[#241518]">
@@ -46,25 +46,6 @@ export default async function PublicStorePage({
       </header>
 
       <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
-        {publicTestStore && (
-          <aside className="mb-8 flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
-            <Store className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-            <div>
-              <p className="font-semibold">Boutique publique de test</p>
-              <p className="mt-1 text-sm leading-6">
-                Cette vitrine est publiée pour tester ORIVFIDE. Le document vendeur associé est
-                un brouillon non contractuel ; il ne remplace pas le contrat définitif de la plateforme.
-                Les commandes et paiements en ligne ne sont pas disponibles.
-              </p>
-            </div>
-          </aside>
-        )}
-        {isDraftAgreement && !publicTestStore && (
-          <aside className="mb-8 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-            Cette boutique de démonstration est associée au brouillon non contractuel du vendeur.
-          </aside>
-        )}
-
         <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-10">
           <p className="inline-flex items-center gap-2 rounded-full bg-[#fbebed] px-3 py-1.5 text-xs font-semibold text-orivfide-red">
             <Store className="h-4 w-4" aria-hidden="true" /> {store.category}
@@ -103,11 +84,6 @@ export default async function PublicStorePage({
                       <div className="flex h-full items-center justify-center text-orivfide-red">
                         <Package className="h-10 w-10" aria-hidden="true" />
                       </div>
-                    )}
-                    {publicTestStore && (
-                      <span className="absolute left-3 top-3 rounded-full bg-amber-100 px-3 py-1 text-[0.68rem] font-bold uppercase tracking-wide text-amber-950">
-                        Produit de test
-                      </span>
                     )}
                   </div>
                   <div className="p-5">

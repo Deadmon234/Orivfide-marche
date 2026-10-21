@@ -1,10 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { pool } from "./db.js";
 
 async function migrate(): Promise<void> {
-  const migrationPath = fileURLToPath(new URL("../migrations/001_initial_schema.sql", import.meta.url));
-  const sql = await readFile(migrationPath, "utf8");
+  const migrationsUrl = new URL("../migrations/", import.meta.url);
+  const migrationsDirectory = fileURLToPath(migrationsUrl);
+  const migrations = (await readdir(migrationsDirectory))
+    .filter((filename) => /^\d+_[a-z0-9_-]+\.sql$/i.test(filename))
+    .sort();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -14,16 +17,22 @@ async function migrate(): Promise<void> {
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    const existing = await client.query(
-      "SELECT 1 FROM schema_migrations WHERE filename = $1",
-      ["001_initial_schema.sql"],
-    );
-    if (existing.rowCount === 0) {
+    let appliedCount = 0;
+    for (const filename of migrations) {
+      const existing = await client.query(
+        "SELECT 1 FROM schema_migrations WHERE filename = $1",
+        [filename],
+      );
+      if (existing.rowCount !== 0) continue;
+      const sql = await readFile(fileURLToPath(new URL(filename, migrationsUrl)), "utf8");
       await client.query(sql);
-      await client.query("INSERT INTO schema_migrations (filename) VALUES ($1)", ["001_initial_schema.sql"]);
+      await client.query("INSERT INTO schema_migrations (filename) VALUES ($1)", [filename]);
+      appliedCount += 1;
     }
     await client.query("COMMIT");
-    console.warn(existing.rowCount === 0 ? "Database migration applied." : "Database is already up to date.");
+    console.warn(appliedCount > 0
+      ? `${appliedCount} database migration(s) applied.`
+      : "Database is already up to date.");
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

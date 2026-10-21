@@ -16,9 +16,8 @@ export const loginSchema = z.object({
   password: z.string().min(1).refine((value) => Buffer.byteLength(value, "utf8") <= 72, "password must be at most 72 UTF-8 bytes."),
 });
 
-export const draftAcknowledgementSchema = z.object({
-  signerName: name("signerName"),
-  acknowledge: z.literal(true),
+export const sellerRejectionSchema = z.object({
+  reason: z.string().trim().min(5).max(1000),
 });
 
 const imageUrl = z.string().trim().max(2048).optional().nullable().transform((value, context) => {

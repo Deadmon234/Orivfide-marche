@@ -2,7 +2,7 @@ import { app } from "./app.js";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 
-const server = app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, "0.0.0.0", () => {
   console.warn(`ORIVFIDE API listening on port ${config.PORT}`);
 });
 

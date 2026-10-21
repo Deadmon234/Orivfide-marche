@@ -76,7 +76,7 @@ export async function registerSeller(
     return formError("La création du compte n’a pas abouti. Réessayez plus tard.");
   }
 
-  redirect("/vendeur/contrat");
+  redirect("/vendeur/statut");
 }
 
 export async function signInSeller(
@@ -101,7 +101,7 @@ export async function signInSeller(
       false,
     );
     await setSellerToken(result.token);
-    if (result.seller.status === "contract_pending") destination = "/vendeur/contrat";
+    if (result.seller.status !== "active") destination = "/vendeur/statut";
   } catch (error) {
     if (error instanceof SellerApiError) return formError(error.message);
     console.error("Seller login request failed", error);
@@ -113,30 +113,6 @@ export async function signInSeller(
 export async function signOutSeller() {
   await clearSellerToken();
   redirect("/vendeur/connexion");
-}
-
-export async function acknowledgeDraftContract(
-  _previousState: SellerFormState,
-  formData: FormData,
-): Promise<SellerFormState> {
-  const accepted = formData.get("acknowledge") === "on";
-  const signerName = readText(formData, "signerName");
-  if (!accepted || signerName.length < 2) {
-    return formError("Confirmez la lecture du brouillon et saisissez votre nom complet.");
-  }
-
-  try {
-    await sellerApi("/api/seller/contract-acknowledgement", {
-      method: "POST",
-      body: JSON.stringify({ signerName, acknowledge: true }),
-    });
-  } catch (error) {
-    if (error instanceof SellerApiError) return formError(error.message);
-    console.error("Draft contract acknowledgement request failed", error);
-    return formError("La confirmation n’a pas pu être enregistrée. Réessayez.");
-  }
-
-  redirect("/vendeur/dashboard");
 }
 
 const productSchema = z.object({
