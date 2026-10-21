@@ -119,31 +119,49 @@ const productSchema = z.object({
   name: z.string().min(2).max(120),
   description: z.string().max(2000),
   price: z.number().int().positive().max(2_000_000_000),
-  imageUrl: z.union([
-    z.literal(""),
-    z.string().url().max(2048).refine((value) => value.startsWith("https://")),
-  ]),
+});
+
+const storeSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(1000),
+  category: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(6).max(32),
 });
 
 export async function addSellerProduct(
   _previousState: SellerFormState,
   formData: FormData,
 ): Promise<SellerFormState> {
+  const image = formData.get("image");
+  if (!(image instanceof File) || image.size === 0) {
+    return formError("Choisissez une image pour le produit.");
+  }
+  if (!["image/jpeg", "image/png", "image/webp"].includes(image.type)) {
+    return formError("Choisissez une image JPEG, PNG ou WebP.");
+  }
+  if (image.size > 3 * 1024 * 1024) {
+    return formError("L’image ne doit pas dépasser 3 Mo.");
+  }
+
   const parsed = productSchema.safeParse({
     name: readText(formData, "name"),
     description: readText(formData, "description"),
     price: Number(readText(formData, "price")),
-    imageUrl: readText(formData, "imageUrl"),
   });
 
   if (!parsed.success) {
-    return formError("Vérifiez le nom, le prix en FCFA et l’adresse HTTPS de la photo.");
+    return formError("Vérifiez le nom du produit, sa description et son prix en FCFA.");
   }
 
   try {
+    const imageBase64 = Buffer.from(await image.arrayBuffer()).toString("base64");
     await sellerApi("/api/seller/products", {
       method: "POST",
-      body: JSON.stringify(parsed.data),
+      body: JSON.stringify({
+        ...parsed.data,
+        imageBase64,
+        imageMimeType: image.type,
+      }),
     });
   } catch (error) {
     if (error instanceof SellerApiError) return formError(error.message);
@@ -165,4 +183,78 @@ export async function toggleSellerProduct(formData: FormData) {
     body: JSON.stringify({ isActive }),
   });
   redirect("/vendeur/dashboard");
+}
+
+export async function updateSellerProduct(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const productId = readText(formData, "productId");
+  if (!z.string().uuid().safeParse(productId).success) {
+    return formError("Identifiant de produit invalide.");
+  }
+  const parsed = productSchema.safeParse({
+    name: readText(formData, "name"),
+    description: readText(formData, "description"),
+    price: Number(readText(formData, "price")),
+  });
+  if (!parsed.success) {
+    return formError("Vérifiez le nom du produit, sa description et son prix en FCFA.");
+  }
+
+  const imageValue = formData.get("image");
+  const image = imageValue instanceof File && imageValue.size > 0 ? imageValue : null;
+  if (image && !["image/jpeg", "image/png", "image/webp"].includes(image.type)) {
+    return formError("Choisissez une image JPEG, PNG ou WebP.");
+  }
+  if (image && image.size > 3 * 1024 * 1024) {
+    return formError("L’image ne doit pas dépasser 3 Mo.");
+  }
+
+  try {
+    const imageFields = image
+      ? {
+          imageBase64: Buffer.from(await image.arrayBuffer()).toString("base64"),
+          imageMimeType: image.type,
+        }
+      : {};
+    await sellerApi(`/api/seller/products/${productId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...parsed.data, ...imageFields }),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller product update request failed", error);
+    return formError("Le produit n’a pas pu être modifié. Réessayez.");
+  }
+
+  redirect("/vendeur/dashboard?produit=modifie");
+}
+
+export async function updateSellerStore(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const parsed = storeSchema.safeParse({
+    name: readText(formData, "name"),
+    description: readText(formData, "description"),
+    category: readText(formData, "category"),
+    phone: readText(formData, "phone"),
+  });
+  if (!parsed.success) {
+    return formError("Vérifiez le nom, la catégorie, la description et le téléphone.");
+  }
+
+  try {
+    await sellerApi("/api/seller/store", {
+      method: "PATCH",
+      body: JSON.stringify(parsed.data),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller store update request failed", error);
+    return formError("Les informations de la boutique n’ont pas pu être modifiées.");
+  }
+
+  redirect("/vendeur/dashboard?boutique=modifiee");
 }

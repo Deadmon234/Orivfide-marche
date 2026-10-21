@@ -12,6 +12,7 @@ import {
   loginSchema,
   registerSchema,
   sellerRejectionSchema,
+  updateStoreSchema,
   updateProductSchema,
 } from "./schemas.js";
 
@@ -44,8 +45,14 @@ type ProductRow = {
   description: string;
   price: number;
   image_url: string | null;
+  has_image_data: boolean;
   is_active: boolean;
   created_at: Date;
+};
+
+type ProductImageRow = {
+  image_data: Buffer | null;
+  image_mime_type: string | null;
 };
 
 const router = Router();
@@ -139,10 +146,38 @@ function publicProduct(row: ProductRow) {
     name: row.name,
     description: row.description,
     price: row.price,
-    imageUrl: row.image_url,
+    imageUrl: row.has_image_data ? `/api/products/${row.id}/image` : row.image_url,
     isActive: row.is_active,
     createdAt: row.created_at.toISOString(),
   };
+}
+
+function hasValidImageSignature(data: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/png") {
+    return data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  }
+  if (mimeType === "image/jpeg") {
+    return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  }
+  return mimeType === "image/webp"
+    && data.length >= 12
+    && data.toString("ascii", 0, 4) === "RIFF"
+    && data.toString("ascii", 8, 12) === "WEBP";
+}
+
+function sendProductImage(
+  result: ProductImageRow | null,
+  response: Response,
+  isPublic: boolean,
+) {
+  if (!result?.image_data || !result.image_mime_type) {
+    throw new HttpError(404, "Product image not found.");
+  }
+  response
+    .set("Content-Type", result.image_mime_type)
+    .set("X-Content-Type-Options", "nosniff")
+    .set("Cache-Control", isPublic ? "public, max-age=3600" : "private, no-store")
+    .send(result.image_data);
 }
 
 function storeSlug(name: string): string {
@@ -220,7 +255,8 @@ router.get("/seller/dashboard", requireSeller, asyncHandler(async (request, resp
   const records = await sellerAndStore(request.sellerId!);
   if (!records) throw new HttpError(404, "Seller account not found.");
   const productResult = await pool.query<ProductRow>(
-    `SELECT id, store_id, name, description, price, image_url, is_active, created_at
+    `SELECT id, store_id, name, description, price, image_url,
+            image_data IS NOT NULL AS has_image_data, is_active, created_at
        FROM products WHERE store_id = $1 ORDER BY created_at DESC`,
     [records.store.id],
   );
@@ -231,9 +267,50 @@ router.get("/seller/dashboard", requireSeller, asyncHandler(async (request, resp
   });
 }));
 
+router.patch("/seller/store", requireSeller, asyncHandler(async (request, response) => {
+  const input = validate(updateStoreSchema, request.body);
+  const updated = await pool.query<StoreRow>(
+    `UPDATE stores st
+        SET name = $1, description = $2, category = $3, phone = $4
+       FROM sellers s
+      WHERE st.seller_id = $5 AND s.id = st.seller_id AND s.status = 'active'
+      RETURNING st.id, st.seller_id, st.name, st.slug, st.description, st.category,
+                st.phone, st.is_public, st.created_at`,
+    [input.name, input.description, input.category, input.phone, request.sellerId],
+  );
+  const store = updated.rows[0];
+  if (!store) throw new HttpError(404, "Seller store not found.");
+  response.json({ store: publicStore(store) });
+}));
+
 router.get("/admin/verify", adminLimiter, requireAdmin, (_request, response) => {
   response.json({ authenticated: true });
 });
+
+router.get("/admin/overview", requireAdmin, asyncHandler(async (_request, response) => {
+  const result = await pool.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM sellers WHERE status = 'pending_review') AS pending_sellers,
+       (SELECT COUNT(*)::int FROM sellers WHERE status = 'active') AS active_sellers,
+       (SELECT COUNT(*)::int FROM sellers WHERE status = 'rejected') AS rejected_sellers,
+       (SELECT COUNT(*)::int FROM stores WHERE is_public = true) AS public_stores,
+       (SELECT COUNT(*)::int FROM products) AS total_products,
+       (SELECT COUNT(*)::int FROM products WHERE is_active = true) AS active_products,
+       (SELECT COUNT(*)::int FROM products WHERE is_active = false) AS hidden_products`,
+  );
+  const row = result.rows[0]!;
+  response.json({
+    overview: {
+      pendingSellers: row.pending_sellers,
+      activeSellers: row.active_sellers,
+      rejectedSellers: row.rejected_sellers,
+      publicStores: row.public_stores,
+      totalProducts: row.total_products,
+      activeProducts: row.active_products,
+      hiddenProducts: row.hidden_products,
+    },
+  });
+}));
 
 router.get("/admin/sellers", requireAdmin, asyncHandler(async (_request, response) => {
   const result = await pool.query(
@@ -262,6 +339,109 @@ router.get("/admin/sellers", requireAdmin, asyncHandler(async (_request, respons
       },
     })),
   });
+}));
+
+router.get("/admin/products", requireAdmin, asyncHandler(async (request, response) => {
+  const { limit } = validate(
+    z.object({ limit: z.coerce.number().int().min(1).max(50).default(50) }),
+    request.query,
+  );
+  const result = await pool.query<ProductRow & {
+    store_name: string;
+    store_slug: string;
+    seller_name: string;
+    seller_email: string;
+  }>(
+    `SELECT p.id, p.store_id, p.name, p.description, p.price, p.image_url,
+            p.image_data IS NOT NULL AS has_image_data, p.is_active, p.created_at,
+            st.name AS store_name, st.slug AS store_slug,
+            s.full_name AS seller_name, s.email AS seller_email
+       FROM products p
+       JOIN stores st ON st.id = p.store_id
+       JOIN sellers s ON s.id = st.seller_id
+      ORDER BY p.created_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  response.json({
+    products: result.rows.map((row) => ({
+      ...publicProduct(row),
+      store: { name: row.store_name, slug: row.store_slug },
+      seller: { name: row.seller_name, email: row.seller_email },
+    })),
+  });
+}));
+
+router.get("/admin/stores", requireAdmin, asyncHandler(async (request, response) => {
+  const { limit } = validate(
+    z.object({ limit: z.coerce.number().int().min(1).max(50).default(50) }),
+    request.query,
+  );
+  const result = await pool.query(
+    `SELECT st.id, st.name, st.slug, st.description, st.category, st.phone,
+            st.is_public, st.created_at, s.full_name AS seller_name,
+            s.email AS seller_email, s.status AS seller_status,
+            (SELECT COUNT(*)::int FROM products p WHERE p.store_id = st.id) AS product_count
+       FROM stores st
+       JOIN sellers s ON s.id = st.seller_id
+      ORDER BY st.created_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  response.json({
+    stores: result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      description: row.description,
+      category: row.category,
+      phone: row.phone,
+      isPublic: row.is_public,
+      createdAt: row.created_at.toISOString(),
+      seller: {
+        name: row.seller_name,
+        email: row.seller_email,
+        status: row.seller_status,
+      },
+      productCount: row.product_count,
+    })),
+  });
+}));
+
+router.patch("/admin/stores/:id", requireAdmin, asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const { isPublic } = validate(z.object({ isPublic: z.boolean() }), request.body);
+  const existing = await queryOne<{ seller_status: SellerRow["status"] }>(
+    `SELECT s.status AS seller_status
+       FROM stores st
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE st.id = $1`,
+    [id],
+  );
+  if (!existing) throw new HttpError(404, "Store not found.");
+  if (isPublic && existing.seller_status !== "active") {
+    throw new HttpError(409, "Only approved active seller stores can be published.");
+  }
+  const result = await pool.query(
+    `UPDATE stores SET is_public = $2 WHERE id = $1 RETURNING id, is_public`,
+    [id, isPublic],
+  );
+  response.json({ store: { id: result.rows[0]!.id, isPublic: result.rows[0]!.is_public } });
+}));
+
+router.patch("/admin/products/:id", requireAdmin, asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const { isActive } = validate(z.object({ isActive: z.boolean() }), request.body);
+  const result = await pool.query<ProductRow>(
+    `UPDATE products
+        SET is_active = $2
+      WHERE id = $1
+      RETURNING id, store_id, name, description, price, image_url,
+                image_data IS NOT NULL AS has_image_data, is_active, created_at`,
+    [id, isActive],
+  );
+  if (!result.rows[0]) throw new HttpError(404, "Product not found.");
+  response.json({ product: publicProduct(result.rows[0]) });
 }));
 
 router.post("/admin/sellers/:id/approve", requireAdmin, asyncHandler(async (request, response) => {
@@ -301,6 +481,14 @@ router.post("/admin/sellers/:id/reject", requireAdmin, asyncHandler(async (reque
 
 router.post("/seller/products", requireSeller, asyncHandler(async (request, response) => {
   const input = validate(createProductSchema, request.body);
+  const imageData = input.imageBase64 ? Buffer.from(input.imageBase64, "base64") : null;
+  if (
+    imageData
+    && input.imageMimeType
+    && !hasValidImageSignature(imageData, input.imageMimeType)
+  ) {
+    throw new HttpError(400, "The uploaded file does not match its image type.");
+  }
   const store = await queryOne<{ id: string; status: SellerRow["status"] }>(
     `SELECT st.id, s.status
        FROM stores st
@@ -313,27 +501,76 @@ router.post("/seller/products", requireSeller, asyncHandler(async (request, resp
     throw new HttpError(403, "Your seller account must be approved before managing products.");
   }
   const inserted = await pool.query<ProductRow>(
-    `INSERT INTO products (store_id, name, description, price, image_url)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, store_id, name, description, price, image_url, is_active, created_at`,
-    [store.id, input.name, input.description, input.price, input.imageUrl],
+    `INSERT INTO products (
+       store_id, name, description, price, image_url, image_data, image_mime_type
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, store_id, name, description, price, image_url,
+               image_data IS NOT NULL AS has_image_data, is_active, created_at`,
+    [
+      store.id,
+      input.name,
+      input.description,
+      input.price,
+      input.imageUrl,
+      imageData,
+      imageData ? input.imageMimeType : null,
+    ],
   );
   response.status(201).json({ product: publicProduct(inserted.rows[0]!) });
+}));
+
+router.get("/seller/products/:id/image", requireSeller, asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const image = await queryOne<ProductImageRow>(
+    `SELECT p.image_data, p.image_mime_type
+       FROM products p
+       JOIN stores st ON st.id = p.store_id
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE p.id = $1 AND s.id = $2 AND s.status = 'active'`,
+    [id, request.sellerId],
+  );
+  sendProductImage(image, response, false);
 }));
 
 router.patch("/seller/products/:id", requireSeller, asyncHandler(async (request, response) => {
   const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
   const input = validate(updateProductSchema, request.body);
+  const imageData = input.imageBase64 ? Buffer.from(input.imageBase64, "base64") : null;
+  if (
+    imageData
+    && input.imageMimeType
+    && !hasValidImageSignature(imageData, input.imageMimeType)
+  ) {
+    throw new HttpError(400, "The uploaded file does not match its image type.");
+  }
   const updated = await pool.query<ProductRow>(
-    `UPDATE products p SET is_active = $1
+    `UPDATE products p
+        SET is_active = COALESCE($1, p.is_active),
+            name = COALESCE($2, p.name),
+            description = COALESCE($3, p.description),
+            price = COALESCE($4, p.price),
+            image_url = CASE WHEN $5::bytea IS NULL THEN p.image_url ELSE NULL END,
+            image_data = COALESCE($5::bytea, p.image_data),
+            image_mime_type = COALESCE($6, p.image_mime_type)
        FROM stores st
-      WHERE p.id = $2 AND p.store_id = st.id AND st.seller_id = $3
+      WHERE p.id = $7 AND p.store_id = st.id AND st.seller_id = $8
         AND EXISTS (
           SELECT 1 FROM sellers s
            WHERE s.id = st.seller_id AND s.status = 'active'
         )
-      RETURNING p.id, p.store_id, p.name, p.description, p.price, p.image_url, p.is_active, p.created_at`,
-    [input.isActive, id, request.sellerId],
+      RETURNING p.id, p.store_id, p.name, p.description, p.price, p.image_url,
+                p.image_data IS NOT NULL AS has_image_data, p.is_active, p.created_at`,
+    [
+      input.isActive ?? null,
+      input.name ?? null,
+      input.description ?? null,
+      input.price ?? null,
+      imageData,
+      imageData ? input.imageMimeType : null,
+      id,
+      request.sellerId,
+    ],
   );
   if (!updated.rows[0]) throw new HttpError(404, "Product not found.");
   response.json({ product: publicProduct(updated.rows[0]) });
@@ -349,11 +586,72 @@ router.get("/public/stores/:slug", asyncHandler(async (request, response) => {
   );
   if (!store) throw new HttpError(404, "Public store not found.");
   const products = await pool.query<ProductRow>(
-    `SELECT id, store_id, name, description, price, image_url, is_active, created_at
+    `SELECT id, store_id, name, description, price, image_url,
+            image_data IS NOT NULL AS has_image_data, is_active, created_at
        FROM products WHERE store_id = $1 AND is_active = true ORDER BY created_at DESC`,
     [store.id],
   );
   response.json({ store: publicStorefront(store), products: products.rows.map(publicProduct) });
+}));
+
+router.get("/public/stores", asyncHandler(async (_request, response) => {
+  const storesResult = await pool.query<StoreRow>(
+    `SELECT st.id, st.seller_id, st.name, st.slug, st.description, st.category,
+            st.phone, st.is_public, st.created_at
+       FROM stores st
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE st.is_public = true AND s.status = 'active'
+      ORDER BY st.created_at DESC
+      LIMIT 16`,
+  );
+  if (storesResult.rows.length === 0) {
+    response.json({ stores: [] });
+    return;
+  }
+
+  const storeIds = storesResult.rows.map((store) => store.id);
+  const productsResult = await pool.query<ProductRow>(
+    `SELECT p.id, p.store_id, p.name, p.description, p.price, p.image_url,
+            p.has_image_data, p.is_active, p.created_at
+       FROM stores st
+       CROSS JOIN LATERAL (
+         SELECT id, store_id, name, description, price, image_url,
+                image_data IS NOT NULL AS has_image_data, is_active, created_at
+           FROM products
+          WHERE store_id = st.id AND is_active = true
+          ORDER BY created_at DESC
+          LIMIT 4
+       ) p
+      WHERE st.id = ANY($1::uuid[])
+      ORDER BY p.created_at DESC`,
+    [storeIds],
+  );
+  const productsByStore = new Map<string, ProductRow[]>();
+  for (const product of productsResult.rows) {
+    const products = productsByStore.get(product.store_id) ?? [];
+    products.push(product);
+    productsByStore.set(product.store_id, products);
+  }
+  response.json({
+    stores: storesResult.rows.map((store) => ({
+      store: publicStorefront(store),
+      products: (productsByStore.get(store.id) ?? []).map(publicProduct),
+    })),
+  });
+}));
+
+router.get("/public/products/:id/image", asyncHandler(async (request, response) => {
+  const { id } = validate(z.object({ id: z.string().uuid() }), request.params);
+  const image = await queryOne<ProductImageRow>(
+    `SELECT p.image_data, p.image_mime_type
+       FROM products p
+       JOIN stores st ON st.id = p.store_id
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE p.id = $1 AND p.is_active = true
+        AND st.is_public = true AND s.status = 'active'`,
+    [id],
+  );
+  sendProductImage(image, response, true);
 }));
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

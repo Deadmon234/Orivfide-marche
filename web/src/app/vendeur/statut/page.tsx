@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { Clock3, ShieldCheck, Store, XCircle } from "lucide-react";
 import { getSellerDashboard } from "@/lib/seller-api";
 import { signOutSeller } from "@/app/vendeur/actions";
+import { OrivfideLogo } from "@/components/OrivfideLogo";
 
 export const metadata = {
   title: "État de la demande vendeur | ORIVFIDE",
@@ -21,8 +22,8 @@ export default async function SellerStatusPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf7f6] px-5 py-10">
       <section className="w-full max-w-2xl rounded-3xl bg-white p-7 shadow-[0_18px_60px_rgba(40,14,19,0.08)] sm:p-10">
-        <Link href="/accueil" className="font-serif text-2xl font-bold tracking-wide text-orivfide-red">
-          ORIVFIDE
+        <Link href="/accueil" aria-label="Retour à l’accueil ORIVFIDE">
+          <OrivfideLogo />
         </Link>
         <div className={`mt-8 flex h-14 w-14 items-center justify-center rounded-2xl ${rejected ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>
           {rejected

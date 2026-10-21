@@ -12,10 +12,14 @@ import {
   Store,
   Users,
 } from "lucide-react";
+import { connection } from "next/server";
 import { OrivfideLogo } from "@/components/OrivfideLogo";
+import { FavoritesLink } from "@/components/FavoritesLink";
+import { MarketplaceSection } from "@/components/MarketplaceSection";
 import { PlatformFooter } from "@/components/PlatformFooter";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
 import { markets } from "@/data/markets";
+import { getPublicStores, SellerApiError } from "@/lib/seller-api";
 
 const productHighlights = [
   markets[0],
@@ -27,10 +31,22 @@ const productHighlights = [
 export const metadata: Metadata = {
   title: "ORIVFIDE — Le commerce, à votre façon",
   description:
-    "Découvrez le projet ORIVFIDE, une marketplace imaginée pour réunir acheteurs, revendeurs et fournisseurs autour de sept univers de produits.",
+    "Parcourez les boutiques validées, découvrez les produits proposés et enregistrez vos coups de cœur dans vos favoris.",
 };
+export const instant = false;
 
-export default function AccueilPage() {
+export default async function AccueilPage() {
+  await connection();
+  let stores: Awaited<ReturnType<typeof getPublicStores>>["stores"] = [];
+  let marketplaceUnavailable = false;
+  try {
+    ({ stores } = await getPublicStores());
+  } catch (error) {
+    if (!(error instanceof SellerApiError) || error.status !== 503) throw error;
+    marketplaceUnavailable = true;
+    console.error("Marketplace listings could not be loaded.", error);
+  }
+
   return (
     <main className="min-h-screen overflow-hidden bg-white">
       <header className="fixed inset-x-0 top-0 z-50 border-b border-black/5 bg-white/90 backdrop-blur-xl">
@@ -42,6 +58,9 @@ export default function AccueilPage() {
             <a className="home-nav-link" href="#univers">
               Nos univers
             </a>
+            <a className="home-nav-link" href="#boutiques">
+              Boutiques
+            </a>
             <a className="home-nav-link" href="#acteurs">
               Pour chacun
             </a>
@@ -51,9 +70,10 @@ export default function AccueilPage() {
             <Link className="home-nav-link" href="/vendeur/inscription">
               Vendre sur ORIVFIDE
             </Link>
+            <FavoritesLink className="home-nav-link inline-flex items-center gap-1.5" />
           </nav>
-          <Link className="home-nav-cta" href="/#offre">
-            Explorer ORIVFIDE <ArrowUpRight aria-hidden="true" size={16} />
+          <Link className="home-nav-cta" href="#boutiques">
+            Explorer les boutiques <ArrowUpRight aria-hidden="true" size={16} />
           </Link>
         </div>
       </header>
@@ -70,12 +90,11 @@ export default function AccueilPage() {
               Le marché s&apos;ouvre à <span className="text-orivfide-red">vous.</span>
             </h1>
             <p className="mt-7 max-w-xl text-lg leading-8 text-[#65595a]">
-              Découvrez le projet ORIVFIDE : une marketplace imaginée pour rapprocher
-              acheteurs, revendeurs et fournisseurs dans un même espace.
+              Parcourez les boutiques approuvées, découvrez leurs produits et gardez vos coups de cœur dans vos favoris.
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
-              <a className="home-button-primary" href="#univers">
-                Découvrir les univers <ArrowRight aria-hidden="true" size={18} />
+              <a className="home-button-primary" href="#boutiques">
+                Découvrir les boutiques <ArrowRight aria-hidden="true" size={18} />
               </a>
               <a className="home-button-secondary" href="#acteurs">
                 Comment ça fonctionne ?
@@ -91,8 +110,7 @@ export default function AccueilPage() {
               Une ambition née au Cameroun, tournée vers tous
             </div>
             <p className="mt-4 max-w-xl text-xs leading-5 text-[#706566]">
-              Cette page présente le concept : le catalogue et la commande en ligne
-              ne sont pas encore proposés sur ce site.
+              La commande en ligne n’est pas encore disponible. Contactez chaque boutique pour ses modalités de vente.
             </p>
           </div>
 
@@ -167,6 +185,8 @@ export default function AccueilPage() {
           </div>
         </section>
       </RevealOnScroll>
+
+      <MarketplaceSection stores={stores} unavailable={marketplaceUnavailable} />
 
       <RevealOnScroll>
         <section id="acteurs" className="px-5 py-24 sm:px-8 lg:py-32">

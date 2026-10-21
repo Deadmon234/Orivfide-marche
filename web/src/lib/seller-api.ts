@@ -45,6 +45,11 @@ export type PublicStore = {
   products: SellerProduct[];
 };
 
+export type PublicStoreListing = {
+  store: PublicStore["store"];
+  products: SellerProduct[];
+};
+
 export type AdminSeller = {
   id: string;
   fullName: string;
@@ -59,6 +64,38 @@ export type AdminSeller = {
     category: string;
     phone: string;
   };
+};
+
+export type AdminOverview = {
+  pendingSellers: number;
+  activeSellers: number;
+  rejectedSellers: number;
+  publicStores: number;
+  totalProducts: number;
+  activeProducts: number;
+  hiddenProducts: number;
+};
+
+export type AdminProduct = SellerProduct & {
+  store: { name: string; slug: string };
+  seller: { name: string; email: string };
+};
+
+export type AdminStore = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  category: string;
+  phone: string;
+  isPublic: boolean;
+  createdAt: string;
+  seller: {
+    name: string;
+    email: string;
+    status: "pending_review" | "active" | "rejected";
+  };
+  productCount: number;
 };
 
 type ApiErrorBody = { error?: string; message?: string };
@@ -143,6 +180,40 @@ export async function publicSellerApi<T>(path: string): Promise<T> {
   return parseResponse<T>(response);
 }
 
+async function fetchProductImage(path: string, token?: string): Promise<Response> {
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  try {
+    return await fetch(`${backendBaseUrl()}${path}`, {
+      headers,
+      cache: "no-store",
+    });
+  } catch (error) {
+    console.error("Product image request failed", error);
+    return Response.json(
+      { error: "The product image service is temporarily unavailable." },
+      { status: 503 },
+    );
+  }
+}
+
+export async function productImageResponse(id: string): Promise<Response> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    return Response.json({ error: "Invalid product identifier." }, { status: 400 });
+  }
+  const token = (await cookies()).get(sellerTokenCookieName)?.value;
+  if (token) {
+    const sellerResponse = await fetchProductImage(
+      `/api/seller/products/${id}/image`,
+      token,
+    );
+    if (sellerResponse.status !== 401 && sellerResponse.status !== 404) {
+      return sellerResponse;
+    }
+  }
+  return fetchProductImage(`/api/public/products/${id}/image`);
+}
+
 export async function requestAdmin<T>(path: string, key: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("x-admin-key", key);
@@ -215,4 +286,20 @@ export async function getSellerDashboard() {
 
 export async function getAdminSellers() {
   return adminApi<{ sellers: AdminSeller[] }>("/api/admin/sellers");
+}
+
+export async function getAdminOverview() {
+  return adminApi<{ overview: AdminOverview }>("/api/admin/overview");
+}
+
+export async function getAdminProducts(limit = 50) {
+  return adminApi<{ products: AdminProduct[] }>(`/api/admin/products?limit=${limit}`);
+}
+
+export async function getAdminStores(limit = 50) {
+  return adminApi<{ stores: AdminStore[] }>(`/api/admin/stores?limit=${limit}`);
+}
+
+export async function getPublicStores() {
+  return publicSellerApi<{ stores: PublicStoreListing[] }>("/api/public/stores");
 }

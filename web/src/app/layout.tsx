@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
+import { FavoritesProvider } from "@/components/FavoritesProvider";
 import "./globals.css";
 
 const inter = Inter({
@@ -13,9 +14,9 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: "ORIVFIDE — Le projet de marketplace",
+  title: "ORIVFIDE — Boutiques et produits",
   description:
-    "Découvrez le projet ORIVFIDE, une marketplace imaginée pour réunir acheteurs, revendeurs et fournisseurs autour de sept univers de produits.",
+    "Découvrez les boutiques approuvées et leurs produits sur ORIVFIDE. Enregistrez vos produits préférés et retrouvez-les à tout moment.",
   icons: {
     icon: "/orivfide-logo.jpeg",
   },
@@ -28,7 +29,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr" className={`${inter.variable} ${playfair.variable} scroll-smooth`}>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <FavoritesProvider>{children}</FavoritesProvider>
+      </body>
     </html>
   );
 }

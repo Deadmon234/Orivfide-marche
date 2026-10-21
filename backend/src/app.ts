@@ -19,7 +19,7 @@ app.use(cors({
   allowedHeaders: ["Authorization", "Content-Type"],
   maxAge: 600,
 }));
-app.use(express.json({ limit: "32kb", strict: true }));
+app.use(express.json({ limit: "5mb", strict: true }));
 
 app.get("/health", (_request, response, next) => {
   pool.query("SELECT 1")

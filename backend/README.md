@@ -58,7 +58,7 @@ Neon credentials are not included. The migration runner tracks applied SQL filen
 
 Registration creates a `pending_review` seller and a private store in one PostgreSQL transaction. The seller can log in to view the review status, but cannot manage products. An administrator approves or rejects the request at `/admin/vendeurs`; approval activates the seller and publishes the store, while rejection keeps it private and records a reason. Only approved sellers and active products are exposed publicly. Contract signing is intentionally not part of this flow while ORIVFIDE finalizes its agreement.
 
-Seller dashboard, product creation, and product updates derive seller identity from a verified bearer token and constrain access to that seller's own store/products. Admin endpoints require `x-admin-key` matching `ADMIN_API_KEY`; the frontend stores that key in an HTTP-only, eight-hour cookie after successful verification.
+Seller dashboard, store updates, product creation, and product updates derive seller identity from a verified bearer token and constrain access to that seller's own store/products. Sellers can update their store name, description, category, and phone, and edit product name, description, price, and optionally replace its image. Product photos can be uploaded as JPEG, PNG, or WebP files up to 3 MB and are stored in PostgreSQL; public image delivery is limited to active products in approved public stores. Admin endpoints require `x-admin-key` matching `ADMIN_API_KEY`; the frontend stores that key in an HTTP-only, eight-hour cookie after successful verification.
 
 ## API contracts
 
@@ -91,16 +91,27 @@ Requires `Authorization: Bearer <token>`. Returns `{ "seller": ..., "store": ...
 
 ### Administrator endpoints
 
+Seller settings are available through `PATCH /api/seller/store` with `name`, `description`, `category`, and `phone`. Product details can be edited through `PATCH /api/seller/products/:id` with `name`, `description`, `price`, and optionally `imageBase64` plus `imageMimeType`; omitting the image keeps the current image. Both endpoints require a seller bearer token and enforce ownership.
+
 Send `x-admin-key: <ADMIN_API_KEY>` on each request.
 
 - `GET /api/admin/verify` verifies the key.
+- `GET /api/admin/overview` returns seller, public-store, and product totals for the admin dashboard.
 - `GET /api/admin/sellers` lists pending and previously rejected requests.
 - `POST /api/admin/sellers/:id/approve` approves the seller and publishes the store.
 - `POST /api/admin/sellers/:id/reject` requires `{ "reason": "..." }`, keeps the store private, and allows a later admin re-review.
+- `GET /api/admin/stores?limit=50` lists the most recent stores and seller details; `limit` is between 1 and 50.
+- `PATCH /api/admin/stores/:id` requires `{ "isPublic": false }` or `{ "isPublic": true }` to change storefront visibility. Only active approved sellers can be published.
+- `GET /api/admin/products?limit=50` lists the most recent products with their store and seller details; `limit` is between 1 and 50.
+- `PATCH /api/admin/products/:id` requires `{ "isActive": false }` or `{ "isActive": true }` to hide or republish a product without deleting it.
 
 ### `POST /api/seller/products`
 
 Bearer token required. Request `{ "name": "Product", "description": "Optional", "price": 5000, "imageUrl": "https://example.com/image.jpg" }`; description and image URL may be omitted, and `imageUrl` may be null/empty. Non-empty image URLs must be valid HTTPS URLs without embedded credentials. Returns `201` with `{ "product": ... }`.
+
+The seller UI uploads JPEG, PNG, or WebP images as `imageBase64` plus `imageMimeType`; files are limited to 3 MB and stored in PostgreSQL. The endpoint also retains support for legacy HTTPS `imageUrl` values.
+
+`GET /api/public/products/:id/image` serves images only for active products in public, approved stores. `GET /api/seller/products/:id/image` requires a seller token and serves that seller's own product images.
 
 ### `PATCH /api/seller/products/:id`
 
@@ -109,6 +120,10 @@ Bearer token required. Request `{ "isActive": false }` or `{ "isActive": true }`
 ### `GET /api/public/stores/:slug`
 
 No token required. Only returns an approved seller's public store and active products, with `{ "store": ..., "products": [...] }`.
+
+### `GET /api/public/stores`
+
+No token required. Lists up to 16 approved public stores with up to four recent active products per store, using `{ "stores": [{ "store": ..., "products": [...] }] }`.
 
 ### `GET /health`
 

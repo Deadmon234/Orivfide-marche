@@ -13,8 +13,11 @@ import {
   Store,
 } from "lucide-react";
 import { getSellerDashboard } from "@/lib/seller-api";
+import { OrivfideLogo } from "@/components/OrivfideLogo";
 import { signOutSeller, toggleSellerProduct } from "@/app/vendeur/actions";
 import { ProductForm } from "./ProductForm";
+import { ProductEditor } from "./ProductEditor";
+import { StoreSettingsForm } from "./StoreSettingsForm";
 
 export const metadata = {
   title: "Tableau de bord vendeur | ORIVFIDE",
@@ -25,7 +28,7 @@ export const instant = false;
 export default async function SellerDashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ produit?: string }>;
+  searchParams: Promise<{ produit?: string; boutique?: string }>;
 }) {
   await connection();
   const { seller, store, products } = await getSellerDashboard();
@@ -35,9 +38,9 @@ export default async function SellerDashboardPage({
   return (
     <main className="min-h-screen bg-[#faf7f6] text-[#241518] lg:flex">
       <aside className="flex flex-col border-b border-black/5 bg-[#241014] px-5 py-5 text-white lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:shrink-0 lg:border-b-0 lg:border-r lg:border-white/10 lg:px-6 lg:py-7">
-        <Link href="/" aria-label="ORIVFIDE">
-          <span className="font-serif text-2xl font-bold tracking-wide">ORIVFIDE</span>
-          <span className="mt-1 block text-xs text-white/55">Espace vendeur</span>
+        <Link href="/" aria-label="ORIVFIDE" className="flex flex-col items-start gap-1">
+          <OrivfideLogo variant="light" />
+          <span className="pl-12 text-xs text-white/55">Espace vendeur</span>
         </Link>
         <div className="mt-7 flex items-center gap-3 rounded-2xl bg-white/5 p-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
@@ -116,6 +119,16 @@ export default async function SellerDashboardPage({
               Le produit a été ajouté à votre boutique.
             </p>
           )}
+          {params.produit === "modifie" && (
+            <p role="status" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              Les informations du produit ont été mises à jour.
+            </p>
+          )}
+          {params.boutique === "modifiee" && (
+            <p role="status" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              Les informations de la boutique ont été mises à jour.
+            </p>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-3">
             {[
@@ -177,13 +190,16 @@ export default async function SellerDashboardPage({
                       <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${product.isActive ? "bg-emerald-50 text-emerald-800" : "bg-zinc-100 text-zinc-600"}`}>
                         {product.isActive ? "Actif · public" : "Masqué"}
                       </span>
-                      <form action={toggleSellerProduct}>
-                        <input type="hidden" name="productId" value={product.id} />
-                        <input type="hidden" name="isActive" value={product.isActive ? "false" : "true"} />
-                        <button className="min-h-10 rounded-full border border-black/10 px-4 text-xs font-semibold transition hover:border-orivfide-red hover:text-orivfide-red">
-                          {product.isActive ? "Masquer" : "Réactiver"}
-                        </button>
-                      </form>
+                      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                        <ProductEditor product={product} />
+                        <form action={toggleSellerProduct}>
+                          <input type="hidden" name="productId" value={product.id} />
+                          <input type="hidden" name="isActive" value={product.isActive ? "false" : "true"} />
+                          <button className="min-h-10 rounded-full border border-black/10 px-4 text-xs font-semibold transition hover:border-orivfide-red hover:text-orivfide-red">
+                            {product.isActive ? "Masquer" : "Réactiver"}
+                          </button>
+                        </form>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -212,6 +228,7 @@ export default async function SellerDashboardPage({
             <Link href="/accueil" className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-orivfide-red">
               <ExternalLink className="h-4 w-4" aria-hidden="true" /> Revenir au site public
             </Link>
+            <StoreSettingsForm store={store} />
           </section>
         </div>
       </section>

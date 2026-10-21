@@ -20,6 +20,13 @@ export const sellerRejectionSchema = z.object({
   reason: z.string().trim().min(5).max(1000),
 });
 
+export const updateStoreSchema = z.object({
+  name: name("storeName"),
+  description: z.string().trim().max(1000),
+  category: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(6).max(32),
+});
+
 const imageUrl = z.string().trim().max(2048).optional().nullable().transform((value, context) => {
   if (value === undefined || value === null || value === "") return null;
   try {
@@ -40,8 +47,74 @@ export const createProductSchema = z.object({
   description: z.string().trim().max(2000).default(""),
   price: z.coerce.number().int().positive().max(2_147_483_647),
   imageUrl,
+  imageBase64: z.string().max(4_194_304).optional().nullable(),
+  imageMimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).optional().nullable(),
+}).superRefine((product, context) => {
+  const hasImageData = Boolean(product.imageBase64);
+  const hasMimeType = Boolean(product.imageMimeType);
+  if (hasImageData !== hasMimeType) {
+    context.addIssue({
+      code: "custom",
+      message: "imageBase64 and imageMimeType must be provided together.",
+    });
+  }
+  if (hasImageData && product.imageUrl) {
+    context.addIssue({
+      code: "custom",
+      message: "Provide either an uploaded image or an image URL, not both.",
+    });
+  }
+  if (product.imageBase64) {
+    const bytes = Buffer.from(product.imageBase64, "base64");
+    if (
+      bytes.length === 0
+      || bytes.length > 3 * 1024 * 1024
+      || bytes.toString("base64") !== product.imageBase64
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Uploaded image data is invalid or exceeds 3 MB.",
+      });
+    }
+  }
 });
 
 export const updateProductSchema = z.object({
   isActive: z.boolean(),
+  name: name("name").optional(),
+  description: z.string().trim().max(2000).optional(),
+  price: z.coerce.number().int().positive().max(2_147_483_647).optional(),
+  imageBase64: z.string().max(4_194_304).optional().nullable(),
+  imageMimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).optional().nullable(),
+}).partial().superRefine((product, context) => {
+  const hasImageData = Boolean(product.imageBase64);
+  const hasMimeType = Boolean(product.imageMimeType);
+  if (hasImageData !== hasMimeType) {
+    context.addIssue({
+      code: "custom",
+      message: "imageBase64 and imageMimeType must be provided together.",
+    });
+  }
+  if (product.imageBase64) {
+    const bytes = Buffer.from(product.imageBase64, "base64");
+    if (
+      bytes.length === 0
+      || bytes.length > 3 * 1024 * 1024
+      || bytes.toString("base64") !== product.imageBase64
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Uploaded image data is invalid or exceeds 3 MB.",
+      });
+    }
+  }
+  if (
+    product.isActive === undefined
+    && product.name === undefined
+    && product.description === undefined
+    && product.price === undefined
+    && product.imageBase64 === undefined
+  ) {
+    context.addIssue({ code: "custom", message: "Provide at least one product field to update." });
+  }
 });

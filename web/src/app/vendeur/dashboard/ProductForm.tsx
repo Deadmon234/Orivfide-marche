@@ -21,8 +21,17 @@ export function ProductForm() {
         <input name="price" type="number" min="1" step="1" required />
       </label>
       <label className="seller-field sm:col-span-2">
-        Photo du produit (URL https)
-        <input name="imageUrl" type="url" placeholder="https://…" />
+        Photo du produit
+        <input
+          name="image"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          required
+          className="file:mr-3 file:rounded-full file:border-0 file:bg-[#fbebed] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-orivfide-red"
+        />
+        <span className="text-xs font-normal text-orivfide-muted">
+          JPEG, PNG ou WebP · 3 Mo maximum
+        </span>
       </label>
       <label className="seller-field sm:col-span-2">
         Description

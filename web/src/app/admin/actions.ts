@@ -35,7 +35,7 @@ export async function signInAdmin(
     return initialError("La connexion administrateur est momentanément impossible.");
   }
   await setAdminKey(key);
-  redirect("/admin/vendeurs");
+  redirect("/admin");
 }
 
 export async function signOutAdmin() {
@@ -47,6 +47,7 @@ export async function approveSeller(formData: FormData) {
   const sellerId = z.string().uuid().parse(formData.get("sellerId"));
   await adminApi(`/api/admin/sellers/${sellerId}/approve`, { method: "POST" });
   revalidatePath("/admin/vendeurs");
+  revalidatePath("/admin");
 }
 
 export async function rejectSeller(formData: FormData) {
@@ -62,4 +63,37 @@ export async function rejectSeller(formData: FormData) {
     body: JSON.stringify({ reason: parsed.reason }),
   });
   revalidatePath("/admin/vendeurs");
+  revalidatePath("/admin");
+}
+
+export async function setAdminProductVisibility(formData: FormData) {
+  const parsed = z.object({
+    productId: z.string().uuid(),
+    isActive: z.enum(["true", "false"]),
+  }).parse({
+    productId: formData.get("productId"),
+    isActive: formData.get("isActive"),
+  });
+  await adminApi(`/api/admin/products/${parsed.productId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isActive: parsed.isActive === "true" }),
+  });
+  revalidatePath("/admin/produits");
+  revalidatePath("/admin");
+}
+
+export async function setAdminStoreVisibility(formData: FormData) {
+  const parsed = z.object({
+    storeId: z.string().uuid(),
+    isPublic: z.enum(["true", "false"]),
+  }).parse({
+    storeId: formData.get("storeId"),
+    isPublic: formData.get("isPublic"),
+  });
+  await adminApi(`/api/admin/stores/${parsed.storeId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isPublic: parsed.isPublic === "true" }),
+  });
+  revalidatePath("/admin/boutiques");
+  revalidatePath("/admin");
 }

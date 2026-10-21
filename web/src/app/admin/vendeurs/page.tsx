@@ -1,8 +1,9 @@
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
-import { Check, LogOut, ShieldCheck, Store, X } from "lucide-react";
-import { getAdminSellers, SellerApiError } from "@/lib/seller-api";
-import { approveSeller, rejectSeller, signOutAdmin } from "@/app/admin/actions";
+import { Check, ShieldCheck, Store, X } from "lucide-react";
+import { getAdminOverview, getAdminSellers, SellerApiError } from "@/lib/seller-api";
+import { approveSeller, rejectSeller } from "@/app/admin/actions";
+import { AdminShell } from "@/components/AdminShell";
 
 export const metadata = {
   title: "Validation des vendeurs | ORIVFIDE",
@@ -13,30 +14,17 @@ export const instant = false;
 export default async function AdminSellersPage() {
   await connection();
   let sellers;
+  let overview;
   try {
-    ({ sellers } = await getAdminSellers());
+    [{ sellers }, { overview }] = await Promise.all([getAdminSellers(), getAdminOverview()]);
   } catch (error) {
     if (error instanceof SellerApiError && error.status === 401) redirect("/admin/connexion");
     throw error;
   }
 
   return (
-    <main className="min-h-screen bg-[#faf7f6] text-[#241518]">
-      <header className="border-b border-black/5 bg-white px-5 py-5 sm:px-8">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div>
-            <p className="font-serif text-2xl font-bold text-orivfide-red">ORIVFIDE</p>
-            <p className="mt-1 text-xs text-orivfide-muted">Administration · validation des vendeurs</p>
-          </div>
-          <form action={signOutAdmin}>
-            <button className="inline-flex items-center gap-2 rounded-full border border-black/10 px-4 py-2 text-sm font-semibold hover:bg-black/[0.03]">
-              <LogOut className="h-4 w-4" aria-hidden="true" /> Déconnexion
-            </button>
-          </form>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
+    <AdminShell pendingCount={overview.pendingSellers} section="sellers">
+      <div>
         <div className="flex items-center gap-3">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#fbebed] text-orivfide-red">
             <ShieldCheck className="h-6 w-6" aria-hidden="true" />
@@ -102,6 +90,6 @@ export default async function AdminSellersPage() {
           </div>
         )}
       </div>
-    </main>
+    </AdminShell>
   );
 }
