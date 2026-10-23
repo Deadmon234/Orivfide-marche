@@ -40,22 +40,42 @@ export function PlatformFooter() {
             </div>
 
             <div className="grid gap-8 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-              <div className="flex items-start gap-4">
-                <Image
-                  src="/christian-fotso.png"
-                  alt="Portrait de Christian Fotso, créateur d’ORIVFIDE"
-                  width={96}
-                  height={96}
-                  className="h-20 w-20 shrink-0 rounded-full border-2 border-white/20 object-cover"
-                />
-                <div className="pt-1">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/55">
-                    Créateur
-                  </p>
-                  <h2 className="mt-2 font-serif text-xl font-bold">Christian Fotso</h2>
-                  <p className="mt-2 text-sm leading-6 text-white/60">
-                    Dévekoppeur du projet ORIVFIDE.
-                  </p>
+              <div className="grid gap-6">
+                <div className="flex items-start gap-4">
+                  <Image
+                    src="/christian-fotso.png"
+                    alt="Portrait de Christian Fotso, créateur d’ORIVFIDE"
+                    width={96}
+                    height={96}
+                    className="h-20 w-20 shrink-0 rounded-full border-2 border-white/20 object-cover"
+                  />
+                  <div className="pt-1">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/55">
+                      Créateur
+                    </p>
+                    <h2 className="mt-2 font-serif text-xl font-bold">Christian Fotso</h2>
+                    <p className="mt-2 text-sm leading-6 text-white/60">
+                      Développeur du projet ORIVFIDE.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-4">
+                  <Image
+                    src="/responsable-marketing.jpeg"
+                    alt="Portrait du responsable marketing d’ORIVFIDE"
+                    width={96}
+                    height={96}
+                    className="h-20 w-20 shrink-0 rounded-full border-2 border-white/20 object-cover"
+                  />
+                  <div className="pt-1">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/55">
+                      Responsable du projet et marketing ORIVFIDE
+                    </p>
+                    <h2 className="mt-2 font-serif text-xl font-bold">Larry</h2>
+                    <p className="mt-2 text-sm leading-6 text-white/60">
+                      Pilotage et coordination du projet.
+                    </p>
+                  </div>
                 </div>
               </div>
 

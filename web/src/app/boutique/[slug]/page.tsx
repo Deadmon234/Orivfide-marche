@@ -2,7 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { ArrowLeft, ArrowRight, Package, ShieldCheck, Store } from "lucide-react";
+import { ArrowLeft, ArrowRight, LayoutDashboard, Package, ShieldCheck, Store } from "lucide-react";
 import { FavoritesLink } from "@/components/FavoritesLink";
 import { OrivfideLogo } from "@/components/OrivfideLogo";
 import { ProductCard } from "@/components/ProductCard";
@@ -42,6 +42,13 @@ export default async function PublicStorePage({
             <OrivfideLogo />
           </Link>
           <div className="flex items-center gap-4">
+            <Link
+              href="/vendeur/dashboard"
+              className="inline-flex items-center gap-2 rounded-full bg-orivfide-red px-4 py-2 text-sm font-semibold text-white transition hover:bg-orivfide-red-dark"
+            >
+              <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
+              Espace vendeur
+            </Link>
             <FavoritesLink className="inline-flex items-center gap-2 text-sm font-semibold text-orivfide-red" />
             <Link href="/accueil#boutiques" className="inline-flex items-center gap-2 text-sm font-semibold text-orivfide-red">
               <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Boutiques

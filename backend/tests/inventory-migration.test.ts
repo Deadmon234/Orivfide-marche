@@ -74,8 +74,8 @@ before(async () => {
     );
     await client.query(
       `INSERT INTO stores (id, seller_id, name, slug, category, phone, is_public)
-       VALUES ($1, $2, 'Store One', $3, 'Test', '000000', true),
-              ($4, $5, 'Store Two', $6, 'Test', '000000', true)`,
+       VALUES ($1, $2, 'Store One', $3, 'Test', '+237600000001', true),
+              ($4, $5, 'Store Two', $6, 'Test', '+237600000002', true)`,
       [storeId, sellerId, `${sellerId}-store`, otherStoreId, otherSellerId, `${otherSellerId}-store`],
     );
     await client.query(
@@ -98,11 +98,16 @@ before(async () => {
     fileURLToPath(new URL("../migrations/005_customer_accounts_and_cart.sql", import.meta.url)),
     "utf8",
   );
+  const phoneVerificationMigration = await readFile(
+    fileURLToPath(new URL("../migrations/006_customer_phone_verification.sql", import.meta.url)),
+    "utf8",
+  );
   await withTestClient(async (client) => {
     await client.query("BEGIN");
     try {
       await client.query(migration);
       await client.query(customerMigration);
+      await client.query(phoneVerificationMigration);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -130,7 +135,7 @@ after(async () => {
 });
 
 test(
-  "inventory migration and stock invariants",
+  "inventory, account, and phone verification migration invariants",
   { skip: canRun ? false : "Set the explicitly confirmed ORIVFIDE_TEST_DATABASE_URL to run against an isolated test database." },
   async (suite) => {
     await suite.test("backfills each existing product without changing its catalog data", async () => {
@@ -196,6 +201,35 @@ test(
           assert.equal(row.seller_roles, 1);
           assert.equal(row.active_carts, 1);
         }
+      });
+    });
+
+    await suite.test("backfills seller phone numbers and prevents duplicate verified phones", async () => {
+      await withTestClient(async (client) => {
+        const result = await client.query<{ id: string; phone_e164: string | null; phone_verified_at: Date | null }>(
+          `SELECT a.id, a.phone_e164, a.phone_verified_at
+             FROM accounts a
+            WHERE a.id = ANY($1::uuid[])
+            ORDER BY a.id`,
+          [[sellerId, otherSellerId]],
+        );
+        assert.equal(result.rowCount, 2);
+        assert.ok(result.rows.every((row) => row.phone_e164?.startsWith("+237")));
+        assert.ok(result.rows.every((row) => row.phone_verified_at === null));
+        const sellerPhone = result.rows.find((row) => row.id === sellerId)?.phone_e164;
+        assert.ok(sellerPhone);
+
+        await client.query(
+          "UPDATE accounts SET phone_verified_at = now() WHERE id = $1",
+          [sellerId],
+        );
+        await assert.rejects(
+          client.query(
+            "UPDATE accounts SET phone_e164 = $1, phone_verified_at = now() WHERE id = $2",
+            [sellerPhone, otherSellerId],
+          ),
+          { code: "23505", constraint: "accounts_verified_phone_unique" },
+        );
       });
     });
 

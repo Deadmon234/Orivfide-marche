@@ -1,11 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
   Check,
   ChevronDown,
+  Eye,
+  EyeOff,
   LockKeyhole,
   Mail,
   Phone,
@@ -20,6 +22,7 @@ const initialState = { message: "", success: false };
 
 export default function SellerRegistrationPage() {
   const [state, formAction, pending] = useActionState(registerSeller, initialState);
+  const [showPassword, setShowPassword] = useState(false);
 
   return (
     <SellerAuthLayout variant="register">
@@ -60,7 +63,8 @@ export default function SellerRegistrationPage() {
             <span className="seller-auth-input-wrap">
               <LockKeyhole className="seller-auth-input-icon" aria-hidden="true" />
               <input
-                type="password"
+                className="!pr-12"
+                type={showPassword ? "text" : "password"}
                 autoComplete="new-password"
                 name="password"
                 placeholder="10 caractères minimum"
@@ -69,6 +73,17 @@ export default function SellerRegistrationPage() {
                 maxLength={72}
                 aria-describedby="seller-password-hint"
               />
+              <button
+                type="button"
+                className="absolute right-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-orivfide-muted hover:text-orivfide-red focus-visible:outline focus-visible:outline-2 focus-visible:outline-orivfide-red"
+                aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((visible) => !visible)}
+              >
+                {showPassword
+                  ? <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  : <Eye className="h-4 w-4" aria-hidden="true" />}
+              </button>
             </span>
             <span id="seller-password-hint" className="seller-auth-field-hint">
               <Check className="h-3.5 w-3.5" aria-hidden="true" /> Choisissez un mot de passe difficile à deviner.

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
 import { ArrowRight, LayoutDashboard, Package, Store } from "lucide-react";
-import { getSellerDashboard } from "@/lib/seller-api";
+import { getSellerDashboard, SellerApiError } from "@/lib/seller-api";
 import { SellerShell } from "./SellerShell";
 
 export const metadata = {
@@ -13,7 +13,16 @@ export const instant = false;
 
 export default async function SellerDashboardPage() {
   await connection();
-  const { seller, store, products } = await getSellerDashboard();
+  let dashboard;
+  try {
+    dashboard = await getSellerDashboard();
+  } catch (error) {
+    if (error instanceof SellerApiError && error.status === 401) {
+      redirect("/vendeur/connexion");
+    }
+    throw error;
+  }
+  const { seller, store, products } = dashboard;
   if (seller.status !== "active") redirect("/vendeur/statut");
 
   const sections = [

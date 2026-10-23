@@ -26,6 +26,9 @@ export default async function CustomerCartPage({
     if (error instanceof SellerApiError && error.status === 401) {
       redirect("/client/connexion?retour=panier");
     }
+    if (error instanceof SellerApiError && error.status === 403) {
+      redirect("/client/verifier-telephone?flow=account");
+    }
     throw error;
   }
   const params = await searchParams;

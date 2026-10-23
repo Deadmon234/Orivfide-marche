@@ -40,27 +40,115 @@ export async function registerCustomer(
       (value) => new TextEncoder().encode(value).length <= 72,
       "Le mot de passe doit contenir au maximum 72 octets.",
     ),
+    phone: z.string().trim().regex(/^\+237[0-9]{9}$/),
+    whatsappConsent: z.literal(true),
   }).safeParse({
     fullName: readText(formData, "fullName"),
     email: readText(formData, "email").toLowerCase(),
     password: formData.get("password"),
+    phone: readText(formData, "phone").replace(/[\s()-]/g, ""),
+    whatsappConsent: formData.get("whatsappConsent") === "on",
   });
   if (!parsed.success) {
-    return formError("Vérifiez vos informations et choisissez un mot de passe d’au moins 10 caractères.");
+    return formError("Vérifiez vos informations, le numéro camerounais au format +237XXXXXXXXX et le mot de passe.");
   }
 
+  let challengeId: string;
   try {
-    await customerApi(
+    const result = await customerApi<{ challengeId: string }>(
       "/api/customer/auth/register",
       { method: "POST", body: JSON.stringify(parsed.data) },
       false,
     );
+    challengeId = result.challengeId;
   } catch (error) {
     if (error instanceof SellerApiError) return formError(error.message);
     console.error("Customer registration request failed", error);
     return formError("La création du compte n’a pas abouti. Réessayez plus tard.");
   }
-  redirect("/client/connexion?inscription=ok");
+  redirect(`/client/verifier-telephone?flow=registration&challengeId=${encodeURIComponent(challengeId)}`);
+}
+
+export async function verifyCustomerRegistration(
+  _previousState: CustomerFormState,
+  formData: FormData,
+): Promise<CustomerFormState> {
+  const parsed = z.object({
+    challengeId: z.string().uuid(),
+    code: z.string().regex(/^[0-9]{6}$/),
+  }).safeParse({
+    challengeId: readText(formData, "challengeId"),
+    code: readText(formData, "code"),
+  });
+  if (!parsed.success) return formError("Saisissez le code à six chiffres reçu sur WhatsApp.");
+
+  try {
+    const result = await customerApi<{ token: string }>(
+      "/api/customer/auth/register/verify",
+      { method: "POST", body: JSON.stringify(parsed.data) },
+      false,
+    );
+    await setCustomerToken(result.token);
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Customer registration verification failed", error);
+    return formError("La vérification n’a pas abouti. Réessayez plus tard.");
+  }
+  redirect("/panier");
+}
+
+export async function startCustomerPhoneVerification(
+  _previousState: CustomerFormState,
+  formData: FormData,
+): Promise<CustomerFormState> {
+  const parsed = z.object({
+    phone: z.string().trim().regex(/^\+237[0-9]{9}$/),
+    whatsappConsent: z.literal(true),
+  }).safeParse({
+    phone: readText(formData, "phone").replace(/[\s()-]/g, ""),
+    whatsappConsent: formData.get("whatsappConsent") === "on",
+  });
+  if (!parsed.success) return formError("Saisissez un numéro camerounais au format +237XXXXXXXXX.");
+
+  let challengeId: string;
+  try {
+    const result = await customerApi<{ challengeId: string }>(
+      "/api/customer/auth/phone/start",
+      { method: "POST", body: JSON.stringify(parsed.data) },
+    );
+    challengeId = result.challengeId;
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Customer phone verification request failed", error);
+    return formError("L’envoi du code n’a pas abouti. Réessayez plus tard.");
+  }
+  redirect(`/client/verifier-telephone?flow=account&challengeId=${encodeURIComponent(challengeId)}`);
+}
+
+export async function verifyCustomerPhone(
+  _previousState: CustomerFormState,
+  formData: FormData,
+): Promise<CustomerFormState> {
+  const parsed = z.object({
+    challengeId: z.string().uuid(),
+    code: z.string().regex(/^[0-9]{6}$/),
+  }).safeParse({
+    challengeId: readText(formData, "challengeId"),
+    code: readText(formData, "code"),
+  });
+  if (!parsed.success) return formError("Saisissez le code à six chiffres reçu sur WhatsApp.");
+
+  try {
+    await customerApi("/api/customer/auth/phone/verify", {
+      method: "POST",
+      body: JSON.stringify(parsed.data),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Customer phone verification failed", error);
+    return formError("La vérification n’a pas abouti. Réessayez plus tard.");
+  }
+  redirect("/panier");
 }
 
 export async function signInCustomer(
@@ -73,19 +161,21 @@ export async function signInCustomer(
   });
   if (!parsed.success) return formError("Saisissez une adresse e-mail et un mot de passe valides.");
 
+  let phoneVerified: boolean;
   try {
-    const result = await customerApi<{ token: string }>(
+    const result = await customerApi<{ token: string; customer: { phoneVerified: boolean } }>(
       "/api/customer/auth/login",
       { method: "POST", body: JSON.stringify(parsed.data) },
       false,
     );
     await setCustomerToken(result.token);
+    phoneVerified = result.customer.phoneVerified;
   } catch (error) {
     if (error instanceof SellerApiError) return formError(error.message);
     console.error("Customer login request failed", error);
     return formError("La connexion n’a pas abouti. Réessayez plus tard.");
   }
-  redirect("/panier");
+  redirect(phoneVerified ? "/panier" : "/client/verifier-telephone?flow=account");
 }
 
 export async function signOutCustomer() {

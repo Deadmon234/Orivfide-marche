@@ -13,8 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { connection } from "next/server";
-import { OrivfideLogo } from "@/components/OrivfideLogo";
-import { FavoritesLink } from "@/components/FavoritesLink";
+import { MarketplaceNavigation } from "@/components/MarketplaceNavigation";
 import { MarketplaceSection } from "@/components/MarketplaceSection";
 import { PlatformFooter } from "@/components/PlatformFooter";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
@@ -50,44 +49,7 @@ export default async function AccueilPage() {
   return (
     <main className="min-h-screen overflow-hidden bg-white">
       <header className="fixed inset-x-0 top-0 z-50 border-b border-black/5 bg-white/90 backdrop-blur-xl">
-        <div className="mx-auto flex h-[4.5rem] max-w-7xl items-center justify-between px-5 sm:px-8">
-          <Link href="/accueil" aria-label="ORIVFIDE — accueil">
-            <OrivfideLogo priority />
-          </Link>
-          <nav aria-label="Navigation principale" className="hidden items-center gap-8 md:flex">
-            <a className="home-nav-link" href="#univers">
-              Nos univers
-            </a>
-            <a className="home-nav-link" href="#boutiques">
-              Boutiques
-            </a>
-            <a className="home-nav-link" href="#acteurs">
-              Pour chacun
-            </a>
-            <a className="home-nav-link" href="#vision">
-              Notre vision
-            </a>
-            <Link className="home-nav-link" href="/vendeur/inscription">
-              Vendre sur ORIVFIDE
-            </Link>
-            <Link className="home-nav-link inline-flex items-center gap-1.5" href="/panier">
-              <ShoppingBag aria-hidden="true" size={16} /> Mon panier
-            </Link>
-            <FavoritesLink className="home-nav-link inline-flex items-center gap-1.5" />
-          </nav>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/panier"
-              aria-label="Mon panier"
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-black/10 text-orivfide-red transition hover:border-orivfide-red"
-            >
-              <ShoppingBag aria-hidden="true" size={18} />
-            </Link>
-            <Link className="home-nav-cta" href="#boutiques">
-              Explorer les boutiques <ArrowUpRight aria-hidden="true" size={16} />
-            </Link>
-          </div>
-        </div>
+        <MarketplaceNavigation />
       </header>
 
       <section className="home-hero relative flex min-h-[740px] items-center px-5 pb-20 pt-32 sm:px-8 lg:min-h-[780px]">

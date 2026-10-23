@@ -17,6 +17,9 @@ export default function CustomerRegistrationPage() {
         <p className="mt-2 text-sm leading-6 text-orivfide-muted">
           Votre compte vous permettra de retrouver votre panier et de suivre vos commandes lorsqu’elles seront disponibles.
         </p>
+        <p className="mt-3 rounded-xl bg-[#faf7f6] px-4 py-3 text-sm leading-6 text-orivfide-muted">
+          Une adresse e-mail ne peut être associée qu’à un seul compte. Chaque numéro WhatsApp vérifié ne peut être utilisé que sur un compte. Si vous avez déjà un compte avec ces coordonnées, connectez-vous : aucun doublon ne sera créé.
+        </p>
         <div className="mt-7"><CustomerRegisterForm /></div>
       </section>
     </main>
