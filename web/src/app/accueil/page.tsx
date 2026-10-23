@@ -70,11 +70,23 @@ export default async function AccueilPage() {
             <Link className="home-nav-link" href="/vendeur/inscription">
               Vendre sur ORIVFIDE
             </Link>
+            <Link className="home-nav-link inline-flex items-center gap-1.5" href="/panier">
+              <ShoppingBag aria-hidden="true" size={16} /> Mon panier
+            </Link>
             <FavoritesLink className="home-nav-link inline-flex items-center gap-1.5" />
           </nav>
-          <Link className="home-nav-cta" href="#boutiques">
-            Explorer les boutiques <ArrowUpRight aria-hidden="true" size={16} />
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/panier"
+              aria-label="Mon panier"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-black/10 text-orivfide-red transition hover:border-orivfide-red"
+            >
+              <ShoppingBag aria-hidden="true" size={18} />
+            </Link>
+            <Link className="home-nav-cta" href="#boutiques">
+              Explorer les boutiques <ArrowUpRight aria-hidden="true" size={16} />
+            </Link>
+          </div>
         </div>
       </header>
 

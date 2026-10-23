@@ -4,7 +4,22 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const sellerTokenCookieName = "orivfide_seller_token";
+export const customerTokenCookieName = "orivfide_customer_token";
 const adminKeyCookieName = "orivfide_admin_key";
+
+export type CustomerAccount = {
+  id: string;
+  fullName: string;
+  email: string;
+  createdAt: string;
+};
+
+export type PublicProductVariant = {
+  inventoryItemId: string;
+  label: string;
+  sku: string | null;
+  available: boolean;
+};
 
 export type SellerAccount = {
   id: string;
@@ -31,6 +46,62 @@ export type SellerProduct = {
   price: number;
   imageUrl: string | null;
   isActive: boolean;
+  available?: boolean;
+  variants?: PublicProductVariant[];
+  createdAt: string;
+};
+
+export type CustomerCartItem = {
+  id: string;
+  inventoryItemId: string;
+  quantity: number;
+  product: {
+    id: string;
+    name: string;
+    description: string;
+    price: number;
+    imageUrl: string | null;
+  };
+  variant: { label: string; sku: string | null };
+  store: { id: string; name: string; slug: string };
+  availableQuantity: number;
+  lineTotal: string;
+  canPurchase: boolean;
+};
+
+export type CustomerCart = {
+  items: CustomerCartItem[];
+  subtotal: string;
+  currency: "XAF";
+};
+
+export type SellerInventoryItem = {
+  id: string;
+  variantId: string;
+  productId: string;
+  productName: string;
+  productIsActive: boolean;
+  variantLabel: string;
+  sku: string | null;
+  attributes: Record<string, string>;
+  isDefault: boolean;
+  variantIsActive: boolean;
+  onHand: number;
+  reserved: number;
+  available: number;
+  lowStockThreshold: number;
+  stockStatus: "out_of_stock" | "low_stock" | "healthy";
+  version: number;
+  updatedAt: string;
+};
+
+export type SellerStockMovement = {
+  id: string;
+  type: string;
+  quantityDelta: number;
+  onHandBefore: number;
+  onHandAfter: number;
+  reason: string;
   createdAt: string;
 };
 
@@ -169,6 +240,35 @@ export async function sellerApi<T>(
   return parseResponse<T>(response);
 }
 
+export async function customerApi<T>(
+  path: string,
+  init: RequestInit = {},
+  authenticated = true,
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (authenticated) {
+    const token = (await cookies()).get(customerTokenCookieName)?.value;
+    if (!token) throw new SellerApiError("Connectez-vous pour accéder à votre panier.", 401);
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${backendBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+    });
+  } catch (error) {
+    console.error("Customer API request failed", error);
+    throw new SellerApiError("Le service client est momentanément indisponible.", 503);
+  }
+  return parseResponse<T>(response);
+}
+
 export async function publicSellerApi<T>(path: string): Promise<T> {
   let response: Response;
   try {
@@ -256,6 +356,20 @@ export async function setSellerToken(token: string) {
   });
 }
 
+export async function setCustomerToken(token: string) {
+  (await cookies()).set(customerTokenCookieName, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
+}
+
+export async function clearCustomerToken() {
+  (await cookies()).delete(customerTokenCookieName);
+}
+
 export async function clearSellerToken() {
   (await cookies()).delete(sellerTokenCookieName);
 }
@@ -282,6 +396,20 @@ export async function clearAdminKey() {
 
 export async function getSellerDashboard() {
   return sellerApi<SellerDashboard>("/api/seller/dashboard");
+}
+
+export async function getCustomerProfile() {
+  return customerApi<{ customer: CustomerAccount }>("/api/customer/me");
+}
+
+export async function getCustomerCart() {
+  return customerApi<CustomerCart>("/api/customer/cart");
+}
+
+export async function getSellerInventory() {
+  return sellerApi<{ inventory: SellerInventoryItem[]; nextCursor: string | null }>(
+    "/api/seller/inventory",
+  );
 }
 
 export async function getAdminSellers() {

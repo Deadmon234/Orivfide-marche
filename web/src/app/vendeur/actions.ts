@@ -8,6 +8,8 @@ import {
   sellerApi,
   setSellerToken,
   type SellerAccount,
+  type SellerInventoryItem,
+  type SellerStockMovement,
   type SellerStore,
 } from "@/lib/seller-api";
 
@@ -169,7 +171,7 @@ export async function addSellerProduct(
     return formError("Le produit n’a pas pu être ajouté. Réessayez.");
   }
 
-  redirect("/vendeur/dashboard?produit=ajoute");
+  redirect("/vendeur/dashboard/produits?produit=ajoute");
 }
 
 export async function toggleSellerProduct(formData: FormData) {
@@ -182,7 +184,7 @@ export async function toggleSellerProduct(formData: FormData) {
     method: "PATCH",
     body: JSON.stringify({ isActive }),
   });
-  redirect("/vendeur/dashboard");
+  redirect("/vendeur/dashboard/produits");
 }
 
 export async function updateSellerProduct(
@@ -228,7 +230,7 @@ export async function updateSellerProduct(
     return formError("Le produit n’a pas pu être modifié. Réessayez.");
   }
 
-  redirect("/vendeur/dashboard?produit=modifie");
+  redirect("/vendeur/dashboard/produits?produit=modifie");
 }
 
 export async function updateSellerStore(
@@ -256,5 +258,175 @@ export async function updateSellerStore(
     return formError("Les informations de la boutique n’ont pas pu être modifiées.");
   }
 
-  redirect("/vendeur/dashboard?boutique=modifiee");
+  redirect("/vendeur/dashboard/boutique?boutique=modifiee");
+}
+
+const inventoryItemIdSchema = z.string().uuid();
+
+export async function updateSellerStock(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const parsed = z.object({
+    inventoryItemId: inventoryItemIdSchema,
+    quantityDelta: z.number().int().min(-1_000_000).max(1_000_000).refine((value) => value !== 0),
+    reason: z.string().trim().min(3).max(500),
+    idempotencyKey: z.string().uuid(),
+  }).safeParse({
+    inventoryItemId: readText(formData, "inventoryItemId"),
+    quantityDelta: Number(readText(formData, "quantityDelta")),
+    reason: readText(formData, "reason"),
+    idempotencyKey: readText(formData, "idempotencyKey"),
+  });
+  if (!parsed.success) return formError("Saisissez une variation de stock non nulle et un motif d’au moins 3 caractères.");
+
+  try {
+    const { inventoryItemId, ...body } = parsed.data;
+    await sellerApi(`/api/seller/inventory/${inventoryItemId}/movements`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller inventory movement request failed", error);
+    return formError("Le stock n’a pas pu être modifié. Réessayez.");
+  }
+  redirect("/vendeur/dashboard/stock?stock=modifie");
+}
+
+export async function updateSellerStockThreshold(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const parsed = z.object({
+    inventoryItemId: inventoryItemIdSchema,
+    lowStockThreshold: z.number().int().min(0).max(1_000_000),
+    reason: z.string().trim().min(3).max(500),
+    idempotencyKey: z.string().uuid(),
+  }).safeParse({
+    inventoryItemId: readText(formData, "inventoryItemId"),
+    lowStockThreshold: Number(readText(formData, "lowStockThreshold")),
+    reason: readText(formData, "reason"),
+    idempotencyKey: readText(formData, "idempotencyKey"),
+  });
+  if (!parsed.success) return formError("Saisissez un seuil valide et un motif d’au moins 3 caractères.");
+
+  try {
+    const { inventoryItemId, ...body } = parsed.data;
+    await sellerApi(`/api/seller/inventory/${inventoryItemId}/threshold`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller inventory threshold request failed", error);
+    return formError("Le seuil n’a pas pu être modifié. Réessayez.");
+  }
+  redirect("/vendeur/dashboard/stock?stock=modifie");
+}
+
+export async function createSellerVariant(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const parsed = z.object({
+    productId: z.string().uuid(),
+    label: z.string().trim().min(1).max(120),
+    sku: z.string().trim().max(80),
+  }).safeParse({
+    productId: readText(formData, "productId"),
+    label: readText(formData, "label"),
+    sku: readText(formData, "sku"),
+  });
+  if (!parsed.success) return formError("Saisissez un nom de variante valide.");
+
+  try {
+    await sellerApi(`/api/seller/products/${parsed.data.productId}/variants`, {
+      method: "POST",
+      body: JSON.stringify({
+        label: parsed.data.label,
+        sku: parsed.data.sku || null,
+        attributes: {},
+      }),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller variant creation request failed", error);
+    return formError("La variante n’a pas pu être ajoutée. Réessayez.");
+  }
+  redirect("/vendeur/dashboard/stock?stock=modifie");
+}
+
+export async function archiveSellerVariant(
+  _previousState: SellerFormState,
+  formData: FormData,
+): Promise<SellerFormState> {
+  const variantId = readText(formData, "variantId");
+  if (!inventoryItemIdSchema.safeParse(variantId).success) {
+    return formError("Identifiant de variante invalide.");
+  }
+  try {
+    await sellerApi(`/api/seller/variants/${variantId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ isActive: false }),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Seller variant archive request failed", error);
+    return formError("La variante n’a pas pu être archivée. Réessayez.");
+  }
+  redirect("/vendeur/dashboard/stock?stock=modifie");
+}
+
+export async function getSellerInventoryPage(
+  cursor?: string,
+): Promise<{ inventory: SellerInventoryItem[]; nextCursor: string | null; error: string | null }> {
+  if (cursor && !z.string().uuid().safeParse(cursor).success) {
+    return { inventory: [], nextCursor: null, error: "Curseur d’inventaire invalide." };
+  }
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) query.set("cursor", cursor);
+  try {
+    return {
+      ...(await sellerApi<{ inventory: SellerInventoryItem[]; nextCursor: string | null }>(
+        `/api/seller/inventory?${query.toString()}`,
+      )),
+      error: null,
+    };
+  } catch (error) {
+    if (error instanceof SellerApiError) {
+      return { inventory: [], nextCursor: null, error: error.message };
+    }
+    console.error("Seller inventory page request failed", error);
+    return { inventory: [], nextCursor: null, error: "Le stock est momentanément indisponible." };
+  }
+}
+
+export async function getSellerStockMovements(
+  inventoryItemId: string,
+  cursor?: string,
+): Promise<{ movements: SellerStockMovement[]; nextCursor: string | null; error: string | null }> {
+  if (!inventoryItemIdSchema.safeParse(inventoryItemId).success) {
+    return { movements: [], nextCursor: null, error: "Identifiant d’inventaire invalide." };
+  }
+  if (cursor && cursor.length > 300) {
+    return { movements: [], nextCursor: null, error: "Curseur d’historique invalide." };
+  }
+  const query = new URLSearchParams({ limit: "20" });
+  if (cursor) query.set("cursor", cursor);
+  try {
+    const result = await sellerApi<{
+      movements: SellerStockMovement[];
+      nextCursor: string | null;
+    }>(
+      `/api/seller/inventory/${inventoryItemId}/movements?${query.toString()}`,
+    );
+    return { ...result, error: null };
+  } catch (error) {
+    if (error instanceof SellerApiError) {
+      return { movements: [], nextCursor: null, error: error.message };
+    }
+    console.error("Seller stock history request failed", error);
+    return { movements: [], nextCursor: null, error: "L’historique du stock est indisponible." };
+  }
 }

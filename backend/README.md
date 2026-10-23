@@ -34,6 +34,17 @@ npm start
 
 `npm run typecheck` and `npm run lint` are also available. Do not commit `.env` or put credentials in source control.
 
+The Phase 3 database integration test creates and drops a uniquely named temporary schema. Run it only against a dedicated test database, never production:
+
+```powershell
+$env:ORIVFIDE_TEST_DATABASE_URL = "postgresql://.../dedicated_test_database"
+$env:ORIVFIDE_TEST_DATABASE_CONFIRM = "I understand only a temporary test schema will be created and dropped"
+$env:ORIVFIDE_TEST_DATABASE_SSL = "true" # set for hosted PostgreSQL; omit for local PostgreSQL
+npm run test:inventory
+```
+
+The test does not read `DATABASE_URL` or load `.env`. It exits as skipped unless both the dedicated test URL and exact confirmation are provided.
+
 ## Configuration and deployment
 
 Required environment variables are checked at startup. Invalid or missing values stop the process with field-specific errors (secret values are not printed).
@@ -53,6 +64,14 @@ Required environment variables are checked at startup. Invalid or missing values
 For Railway, set the service root directory to `/backend`. The checked-in `railway.json` configures the build, runs `npm run migrate` before deployment, starts the API with `npm start`, and checks `/health`. Set `DATABASE_URL`, `JWT_SECRET`, `ADMIN_API_KEY`, and `CORS_ORIGINS` in Railway's service variables; let Railway provide `PORT`. Point the web app's `BACKEND_API_URL` to the generated public service domain. For other providers, install dependencies with `npm ci`, run `npm run build`, apply `npm run migrate` as a release step, and start with `npm start`. The API uses Helmet, a 32 KB JSON body limit, HTTPS-only product image URLs, parameterized SQL, bcrypt password hashes, HS256 bearer tokens, and in-memory rate limits (use a shared rate-limit store when running multiple replicas). It handles `SIGINT` and `SIGTERM` by closing the HTTP server and PostgreSQL pool.
 
 Neon credentials are not included. The migration runner tracks applied SQL filenames in `schema_migrations` and runs migrations transactionally.
+
+The commercial and operational principles for the planned transaction-enabled marketplace, including decisions that still require confirmation, are documented in [the Phase 1 project framing](../docs/phase-1-cadrage-commercial-et-operationnel.md). This working document is not a substitute for legal review or partner contracts.
+
+The target entities, stock reservation model, multi-seller order structure, state transitions, and decisions for subsequent phases are documented in [the Phase 2 architecture and roadmap](../docs/phase-2-architecture-et-modele-de-donnees.md). It is a design document; do not apply it as a production schema until migrations are reviewed and tested.
+
+The detailed seller inventory design, API contracts, migration behavior, and acceptance tests for Phase 3 are documented in [the Phase 3 stock design](../docs/phase-3-conception-stock.md). Migration `004_product_inventory.sql` has been applied to the confirmed Neon production database. New environments must apply it before deploying code that uses inventory tables.
+
+The customer account and multi-seller cart design is documented in [the Phase 4 cart and orders design](../docs/phase-4-conception-panier-commandes.md). The first customer-auth/cart API and web increment is in the codebase. Migration `005_customer_accounts_and_cart.sql` was applied to the Neon database configured in the local backend environment on 23 October 2026. It has not been validated against a dedicated test database or deployed with the backend. There is still no order/checkout implementation, and Phase 3 database integration testing remains a prerequisite to transaction implementation.
 
 ## Seller approval behavior
 
@@ -109,7 +128,35 @@ Send `x-admin-key: <ADMIN_API_KEY>` on each request.
 
 Bearer token required. Request `{ "name": "Product", "description": "Optional", "price": 5000, "imageUrl": "https://example.com/image.jpg" }`; description and image URL may be omitted, and `imageUrl` may be null/empty. Non-empty image URLs must be valid HTTPS URLs without embedded credentials. Returns `201` with `{ "product": ... }`.
 
-The seller UI uploads JPEG, PNG, or WebP images as `imageBase64` plus `imageMimeType`; files are limited to 3 MB and stored in PostgreSQL. The endpoint also retains support for legacy HTTPS `imageUrl` values.
+The seller UI uploads JPEG, PNG, or WebP images as `imageBase64` plus `imageMimeType`; files are limited to 3 MB and stored in PostgreSQL. The endpoint also retains support for legacy HTTPS `imageUrl` values. Product creation now atomically creates a default `Standard` variant, zeroed inventory, and an initial stock journal entry.
+
+### Seller inventory
+
+All routes require an active seller bearer token and restrict data to that seller's store.
+
+- `GET /api/seller/inventory?limit=50&cursor=<variant-uuid>` lists inventory, variants, available quantities, thresholds, and stock status. Page size is limited to 50.
+- `POST /api/seller/inventory/:inventoryItemId/movements` accepts `{ "quantityDelta": 12, "reason": "Réception fournisseur", "idempotencyKey": "<uuid>" }`. Nonzero adjustments are limited to one million units per request; insufficient stock or conflicting key reuse returns `409`.
+- `PATCH /api/seller/inventory/:inventoryItemId/threshold` accepts `{ "lowStockThreshold": 5, "reason": "Seuil de réapprovisionnement", "idempotencyKey": "<uuid>" }`.
+- `GET /api/seller/inventory/:inventoryItemId/movements?limit=20&cursor=<opaque-cursor>` returns the read-only movement history; page size is limited to 50.
+- `POST /api/seller/products/:productId/variants` creates a variant with `{ "label": "Rouge / M", "sku": "SKU-01", "attributes": { "couleur": "Rouge", "taille": "M" } }`; SKU and attributes are optional.
+- `PATCH /api/seller/variants/:variantId` with `{ "isActive": false }` archives a non-default variant.
+
+Public product responses include only a boolean `available`; exact stock quantities remain private to the seller.
+
+### Customer accounts and cart (migration 005)
+
+The following routes depend on `005_customer_accounts_and_cart.sql`; apply it to each target database before running this API version:
+
+- `POST /api/customer/auth/register` accepts `{ "fullName": "Amina Example", "email": "amina@example.com", "password": "at-least-10-characters" }`; returns a generic `202` response to avoid email enumeration.
+- `POST /api/customer/auth/login` uses the same email/password shape and returns a customer token with a distinct JWT audience/type from seller tokens.
+- `GET /api/customer/me` returns the authenticated customer's profile.
+- `GET /api/customer/cart` returns current product prices, available quantity and per-store line information.
+- `POST /api/customer/cart/items` accepts `{ "inventoryItemId": "<uuid>", "quantity": 1 }`; adding a cart item does not reserve inventory.
+- `PATCH /api/customer/cart/items/:itemId` accepts `{ "quantity": 2 }`.
+- `DELETE /api/customer/cart/items/:itemId` removes only an item belonging to the authenticated customer's active cart.
+- `DELETE /api/customer/cart/items` clears only the authenticated customer's active cart.
+
+Customer tokens cannot be used on seller endpoints. Checkout, order creation, payments and delivery are not implemented; the web cart only provides an estimate and keeps confirmation disabled.
 
 `GET /api/public/products/:id/image` serves images only for active products in public, approved stores. `GET /api/seller/products/:id/image` requires a seller token and serves that seller's own product images.
 

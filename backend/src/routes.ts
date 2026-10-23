@@ -1,19 +1,32 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { createAccessToken, requireSeller } from "./auth.js";
+import {
+  createAccessToken,
+  createCustomerAccessToken,
+  requireCustomer,
+  requireSeller,
+} from "./auth.js";
 import { config } from "./config.js";
 import { inTransaction, pool, queryOne } from "./db.js";
 import { HttpError } from "./errors.js";
 import {
   createProductSchema,
+  createVariantSchema,
+  cartItemSchema,
+  cartQuantitySchema,
+  customerRegisterSchema,
+  inventoryMovementSchema,
+  inventoryThresholdSchema,
   loginSchema,
+  paginationSchema,
   registerSchema,
   sellerRejectionSchema,
   updateStoreSchema,
   updateProductSchema,
+  updateVariantSchema,
 } from "./schemas.js";
 
 type SellerRow = {
@@ -24,6 +37,38 @@ type SellerRow = {
   status: "pending_review" | "active" | "rejected";
   rejection_reason: string | null;
   created_at: Date;
+};
+
+type CustomerAccountRow = {
+  id: string;
+  email: string;
+  full_name: string;
+  password_hash: string;
+  status: "active" | "disabled";
+  created_at: Date;
+};
+
+type CartItemRow = {
+  id: string;
+  inventory_item_id: string;
+  quantity: number;
+  product_id: string;
+  product_name: string;
+  product_price: number;
+  product_description: string;
+  product_image_url: string | null;
+  has_image_data: boolean;
+  variant_label: string;
+  sku: string | null;
+  store_id: string;
+  store_name: string;
+  store_slug: string;
+  on_hand: number;
+  reserved: number;
+  product_is_active: boolean;
+  variant_is_active: boolean;
+  store_is_public: boolean;
+  seller_is_active: boolean;
 };
 
 type StoreRow = {
@@ -48,6 +93,42 @@ type ProductRow = {
   has_image_data: boolean;
   is_active: boolean;
   created_at: Date;
+  available?: boolean;
+  variants?: Array<{
+    inventoryItemId: string;
+    label: string;
+    sku: string | null;
+    available: boolean;
+  }>;
+};
+
+type InventoryRow = {
+  id: string;
+  variant_id: string;
+  product_id: string;
+  product_name: string;
+  product_is_active: boolean;
+  variant_label: string;
+  sku: string | null;
+  attributes: Record<string, string>;
+  is_default: boolean;
+  variant_is_active: boolean;
+  on_hand: number;
+  reserved: number;
+  low_stock_threshold: number;
+  version: string | number;
+  updated_at: Date;
+};
+
+type StockMovementRow = {
+  id: string;
+  movement_type: string;
+  delta_on_hand: number;
+  on_hand_before: number;
+  on_hand_after: number;
+  reason: string;
+  created_at: Date;
+  request_hash: string;
 };
 
 type ProductImageRow = {
@@ -57,6 +138,13 @@ type ProductImageRow = {
 
 const router = Router();
 const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many authentication attempts. Try again later." },
+});
+const customerAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: "draft-7",
@@ -115,6 +203,41 @@ function publicSeller(row: SellerRow) {
   };
 }
 
+function publicCustomer(row: CustomerAccountRow) {
+  return {
+    id: row.id,
+    fullName: row.full_name,
+    email: row.email,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+function publicCartItem(row: CartItemRow) {
+  const available = Math.max(0, Number(row.on_hand) - Number(row.reserved));
+  const purchasable = row.product_is_active
+    && row.variant_is_active
+    && row.store_is_public
+    && row.seller_is_active
+    && available > 0;
+  return {
+    id: row.id,
+    inventoryItemId: row.inventory_item_id,
+    quantity: Number(row.quantity),
+    product: {
+      id: row.product_id,
+      name: row.product_name,
+      description: row.product_description,
+      price: Number(row.product_price),
+      imageUrl: row.has_image_data ? `/api/products/${row.product_id}/image` : row.product_image_url,
+    },
+    variant: { label: row.variant_label, sku: row.sku },
+    store: { id: row.store_id, name: row.store_name, slug: row.store_slug },
+    availableQuantity: available,
+    lineTotal: (BigInt(row.product_price) * BigInt(row.quantity)).toString(),
+    canPurchase: purchasable && Number(row.quantity) <= available,
+  };
+}
+
 function publicStore(row: StoreRow) {
   return {
     id: row.id,
@@ -148,8 +271,71 @@ function publicProduct(row: ProductRow) {
     price: row.price,
     imageUrl: row.has_image_data ? `/api/products/${row.id}/image` : row.image_url,
     isActive: row.is_active,
+    ...(row.available === undefined ? {} : { available: row.available }),
+    ...(row.variants === undefined ? {} : { variants: row.variants }),
     createdAt: row.created_at.toISOString(),
   };
+}
+
+function publicInventory(row: InventoryRow) {
+  const onHand = Number(row.on_hand);
+  const reserved = Number(row.reserved);
+  const available = onHand - reserved;
+  const threshold = Number(row.low_stock_threshold);
+  return {
+    id: row.id,
+    variantId: row.variant_id,
+    productId: row.product_id,
+    productName: row.product_name,
+    productIsActive: row.product_is_active,
+    variantLabel: row.variant_label,
+    sku: row.sku,
+    attributes: row.attributes,
+    isDefault: row.is_default,
+    variantIsActive: row.variant_is_active,
+    onHand,
+    reserved,
+    available,
+    lowStockThreshold: threshold,
+    stockStatus: available === 0
+      ? "out_of_stock"
+      : threshold > 0 && available <= threshold
+        ? "low_stock"
+        : "healthy",
+    version: Number(row.version),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function publicStockMovement(row: StockMovementRow) {
+  return {
+    id: row.id,
+    type: row.movement_type,
+    quantityDelta: Number(row.delta_on_hand),
+    onHandBefore: Number(row.on_hand_before),
+    onHandAfter: Number(row.on_hand_after),
+    reason: row.reason,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+function requestHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function decodeMovementCursor(cursor: string): { createdAt: string; id: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw new HttpError(400, "Invalid movement cursor.");
+  }
+  const parsed = z.object({
+    createdAt: z.string().datetime(),
+    id: z.string().uuid(),
+  }).safeParse(value);
+  if (!parsed.success) throw new HttpError(400, "Invalid movement cursor.");
+  return parsed.data;
 }
 
 function hasValidImageSignature(data: Buffer, mimeType: string): boolean {
@@ -201,16 +387,87 @@ async function sellerAndStore(sellerId: string) {
   return seller && store ? { seller, store } : null;
 }
 
+async function requireActiveCustomer(
+  request: Request,
+  _response: Response,
+  next: NextFunction,
+) {
+  try {
+    const account = await queryOne<{ id: string }>(
+      `SELECT a.id
+         FROM accounts a
+         JOIN account_roles role ON role.account_id = a.id AND role.role = 'customer'
+        WHERE a.id = $1 AND a.status = 'active'`,
+      [request.customerId],
+    );
+    if (!account) throw new HttpError(401, "Customer account is unavailable.");
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getOrCreateActiveCart(accountId: string): Promise<string> {
+  return inTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO carts (account_id, status)
+       VALUES ($1, 'active')
+       ON CONFLICT (account_id) WHERE status = 'active' DO NOTHING`,
+      [accountId],
+    );
+    const cart = await client.query<{ id: string }>(
+      "SELECT id FROM carts WHERE account_id = $1 AND status = 'active'",
+      [accountId],
+    );
+    if (!cart.rows[0]) throw new HttpError(500, "Customer cart is unavailable.");
+    return cart.rows[0].id;
+  });
+}
+
+async function customerCartItems(cartId: string): Promise<CartItemRow[]> {
+  const result = await pool.query<CartItemRow>(
+    `SELECT ci.id, ci.inventory_item_id, ci.quantity,
+            p.id AS product_id, p.name AS product_name, p.price AS product_price,
+            p.description AS product_description, p.image_url AS product_image_url,
+            p.image_data IS NOT NULL AS has_image_data,
+            v.label AS variant_label, v.sku,
+            st.id AS store_id, st.name AS store_name, st.slug AS store_slug,
+            i.on_hand, i.reserved, p.is_active AS product_is_active,
+            v.is_active AS variant_is_active, st.is_public AS store_is_public,
+            (s.status = 'active') AS seller_is_active
+       FROM cart_items ci
+       JOIN inventory_items i ON i.id = ci.inventory_item_id
+       JOIN product_variants v ON v.id = i.variant_id
+       JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+       JOIN stores st ON st.id = v.store_id
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE ci.cart_id = $1
+      ORDER BY st.name, p.name, v.label`,
+    [cartId],
+  );
+  return result.rows;
+}
+
 router.post("/auth/register", authLimiter, asyncHandler(async (request, response) => {
   const input = validate(registerSchema, request.body);
   const passwordHash = await bcrypt.hash(input.password, 12);
   try {
     const records = await inTransaction(async (client) => {
+      const accountId = randomUUID();
+      await client.query(
+        `INSERT INTO accounts (id, email, full_name, password_hash)
+         VALUES ($1, $2, $3, $4)`,
+        [accountId, input.email, input.fullName, passwordHash],
+      );
+      await client.query(
+        "INSERT INTO account_roles (account_id, role) VALUES ($1, 'seller')",
+        [accountId],
+      );
       const sellerResult = await client.query<SellerRow>(
-        `INSERT INTO sellers (email, full_name, password_hash)
-         VALUES ($1, $2, $3)
+        `INSERT INTO sellers (id, account_id, email, full_name, password_hash)
+         VALUES ($1, $1, $2, $3, $4)
          RETURNING id, full_name, email, password_hash, status, rejection_reason, created_at`,
-        [input.email, input.fullName, passwordHash],
+        [accountId, input.email, input.fullName, passwordHash],
       );
       const seller = sellerResult.rows[0]!;
       const storeResult = await client.query<StoreRow>(
@@ -224,7 +481,7 @@ router.post("/auth/register", authLimiter, asyncHandler(async (request, response
     const token = await createAccessToken(records.seller.id);
     response.status(201).json({ token, seller: publicSeller(records.seller), store: publicStore(records.store) });
   } catch (error) {
-    if (isUniqueViolation(error, "sellers_email_unique")) {
+    if (isUniqueViolation(error, "sellers_email_unique") || isUniqueViolation(error, "accounts_email_unique")) {
       throw new HttpError(409, "An account with this email already exists.");
     }
     throw error;
@@ -251,12 +508,271 @@ router.post("/auth/login", authLimiter, asyncHandler(async (request, response) =
   response.json({ token, seller: publicSeller(seller), store: publicStore(store) });
 }));
 
+router.post("/customer/auth/register", customerAuthLimiter, asyncHandler(async (request, response) => {
+  const input = validate(customerRegisterSchema, request.body);
+  const passwordHash = await bcrypt.hash(input.password, 12);
+  let accountId: string | null = null;
+  let createdAccount = false;
+  try {
+    accountId = await inTransaction(async (client) => {
+      const account = await client.query<{ id: string }>(
+        `INSERT INTO accounts (email, full_name, password_hash)
+         VALUES ($1, $2, $3)
+         RETURNING id`,
+        [input.email, input.fullName, passwordHash],
+      );
+      const accountId = account.rows[0]!.id;
+      await client.query(
+        "INSERT INTO account_roles (account_id, role) VALUES ($1, 'customer')",
+        [accountId],
+      );
+      await client.query(
+        "INSERT INTO carts (account_id, status) VALUES ($1, 'active')",
+        [accountId],
+      );
+      return accountId;
+    });
+    createdAccount = true;
+  } catch (error) {
+    if (!isUniqueViolation(error, "accounts_email_unique")) throw error;
+    const existing = await queryOne<{ id: string }>(
+      "SELECT id FROM accounts WHERE email = $1 AND status = 'active'",
+      [input.email],
+    );
+    accountId = existing?.id ?? null;
+  }
+  if (accountId) {
+    const existing = await queryOne<{ password_hash: string }>(
+      "SELECT password_hash FROM accounts WHERE id = $1 AND status = 'active'",
+      [accountId],
+    );
+    const passwordMatches = existing
+      ? await bcrypt.compare(input.password, existing.password_hash)
+      : false;
+    if (!createdAccount && passwordMatches) {
+      await inTransaction(async (client) => {
+        await client.query(
+          `INSERT INTO account_roles (account_id, role)
+           VALUES ($1, 'customer')
+           ON CONFLICT (account_id, role) DO NOTHING`,
+          [accountId],
+        );
+        await client.query(
+          `INSERT INTO carts (account_id, status)
+           VALUES ($1, 'active')
+           ON CONFLICT (account_id) WHERE status = 'active' DO NOTHING`,
+          [accountId],
+        );
+      });
+    }
+  }
+  response.status(202).json({
+    message: "Si ces informations permettent de créer un compte, vous pouvez maintenant vous connecter.",
+  });
+}));
+
+router.post("/customer/auth/login", customerAuthLimiter, asyncHandler(async (request, response) => {
+  const input = validate(loginSchema, request.body);
+  const account = await queryOne<CustomerAccountRow>(
+    `SELECT a.id, a.email, a.full_name, a.password_hash, a.status, a.created_at
+       FROM accounts a
+       JOIN account_roles role ON role.account_id = a.id AND role.role = 'customer'
+      WHERE a.email = $1 AND a.status = 'active'`,
+    [input.email],
+  );
+  if (!account || !(await bcrypt.compare(input.password, account.password_hash))) {
+    throw new HttpError(401, "Email ou mot de passe incorrect.");
+  }
+  const token = await createCustomerAccessToken(account.id);
+  response.json({ token, customer: publicCustomer(account) });
+}));
+
+router.get("/customer/me", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const account = await queryOne<CustomerAccountRow>(
+    `SELECT id, email, full_name, password_hash, status, created_at
+       FROM accounts WHERE id = $1 AND status = 'active'`,
+    [request.customerId],
+  );
+  if (!account) throw new HttpError(401, "Customer account is unavailable.");
+  response.json({ customer: publicCustomer(account) });
+}));
+
+router.get("/customer/cart", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const cartId = await getOrCreateActiveCart(request.customerId!);
+  const items = (await customerCartItems(cartId)).map(publicCartItem);
+  const subtotal = items
+    .reduce((total, item) => total + BigInt(item.lineTotal), 0n)
+    .toString();
+  response.json({ items, subtotal, currency: "XAF" });
+}));
+
+router.post("/customer/cart/items", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const input = validate(cartItemSchema, request.body);
+  await inTransaction(async (client) => {
+    const cartResult = await client.query<{ id: string }>(
+      `SELECT id FROM carts
+        WHERE account_id = $1 AND status = 'active'
+        FOR UPDATE`,
+      [request.customerId],
+    );
+    if (!cartResult.rows[0]) throw new HttpError(404, "Active cart not found.");
+    const cartId = cartResult.rows[0].id;
+    const inventoryResult = await client.query<{
+      id: string;
+      on_hand: number;
+      reserved: number;
+    }>(
+      `SELECT i.id, i.on_hand, i.reserved
+         FROM inventory_items i
+         JOIN product_variants v ON v.id = i.variant_id
+         JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE i.id = $1 AND v.is_active = true AND p.is_active = true
+          AND st.is_public = true AND s.status = 'active'
+        FOR UPDATE OF i`,
+      [input.inventoryItemId],
+    );
+    const inventory = inventoryResult.rows[0];
+    if (!inventory) throw new HttpError(404, "Available product variant not found.");
+    const available = Number(inventory.on_hand) - Number(inventory.reserved);
+    const existingResult = await client.query<{ id: string; quantity: number }>(
+      `SELECT id, quantity FROM cart_items
+        WHERE cart_id = $1 AND inventory_item_id = $2
+        FOR UPDATE`,
+      [cartId, input.inventoryItemId],
+    );
+    const existing = existingResult.rows[0];
+    const nextQuantity = Number(existing?.quantity ?? 0) + input.quantity;
+    if (available < 1 || nextQuantity > available || nextQuantity > 1_000_000) {
+      throw new HttpError(409, "La quantité demandée n’est plus disponible.");
+    }
+    if (existing) {
+      await client.query(
+        "UPDATE cart_items SET quantity = $2, updated_at = now() WHERE id = $1",
+        [existing.id, nextQuantity],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO cart_items (cart_id, inventory_item_id, quantity)
+         VALUES ($1, $2, $3)`,
+        [cartId, input.inventoryItemId, input.quantity],
+      );
+    }
+    await client.query("UPDATE carts SET updated_at = now() WHERE id = $1", [cartId]);
+  });
+  response.status(200).json({ message: "Produit ajouté au panier." });
+}));
+
+router.patch("/customer/cart/items/:itemId", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const { itemId } = validate(z.object({ itemId: z.string().uuid() }), request.params);
+  const { quantity } = validate(cartQuantitySchema, request.body);
+  await inTransaction(async (client) => {
+    const cartResult = await client.query<{ id: string }>(
+      `SELECT id FROM carts
+        WHERE account_id = $1 AND status = 'active'
+        FOR UPDATE`,
+      [request.customerId],
+    );
+    if (!cartResult.rows[0]) throw new HttpError(404, "Cart item not found.");
+    const cartId = cartResult.rows[0].id;
+    const itemResult = await client.query<{ inventory_item_id: string }>(
+      `SELECT inventory_item_id FROM cart_items
+        WHERE id = $1 AND cart_id = $2`,
+      [itemId, cartId],
+    );
+    if (!itemResult.rows[0]) throw new HttpError(404, "Cart item not found.");
+    const inventoryResult = await client.query<{
+      on_hand: number;
+      reserved: number;
+      product_is_active: boolean;
+      variant_is_active: boolean;
+      store_is_public: boolean;
+      seller_is_active: boolean;
+    }>(
+      `SELECT i.on_hand, i.reserved, p.is_active AS product_is_active,
+              v.is_active AS variant_is_active, st.is_public AS store_is_public,
+              (s.status = 'active') AS seller_is_active
+         FROM inventory_items i
+         JOIN product_variants v ON v.id = i.variant_id
+         JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE i.id = $1
+        FOR UPDATE OF i`,
+      [itemResult.rows[0].inventory_item_id],
+    );
+    const inventory = inventoryResult.rows[0];
+    if (
+      !inventory
+      || !inventory.product_is_active
+      || !inventory.variant_is_active
+      || !inventory.store_is_public
+      || !inventory.seller_is_active
+      || quantity > Number(inventory.on_hand) - Number(inventory.reserved)
+    ) {
+      throw new HttpError(409, "La quantité demandée n’est plus disponible.");
+    }
+    await client.query(
+      "UPDATE cart_items SET quantity = $2, updated_at = now() WHERE id = $1 AND cart_id = $3",
+      [itemId, quantity, cartId],
+    );
+    await client.query("UPDATE carts SET updated_at = now() WHERE id = $1", [cartId]);
+  });
+  response.json({ message: "Quantité du panier mise à jour." });
+}));
+
+router.delete("/customer/cart/items/:itemId", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const { itemId } = validate(z.object({ itemId: z.string().uuid() }), request.params);
+  const result = await pool.query(
+    `DELETE FROM cart_items ci
+      USING carts c
+      WHERE ci.id = $1 AND ci.cart_id = c.id
+        AND c.account_id = $2 AND c.status = 'active'
+      RETURNING ci.id`,
+    [itemId, request.customerId],
+  );
+  if (result.rowCount !== 1) throw new HttpError(404, "Cart item not found.");
+  response.json({ message: "Produit retiré du panier." });
+}));
+
+router.delete("/customer/cart/items", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  await pool.query(
+    `DELETE FROM cart_items ci
+      USING carts c
+      WHERE ci.cart_id = c.id AND c.account_id = $1 AND c.status = 'active'`,
+    [request.customerId],
+  );
+  response.json({ message: "Panier vidé." });
+}));
+
 router.get("/seller/dashboard", requireSeller, asyncHandler(async (request, response) => {
   const records = await sellerAndStore(request.sellerId!);
   if (!records) throw new HttpError(404, "Seller account not found.");
   const productResult = await pool.query<ProductRow>(
     `SELECT id, store_id, name, description, price, image_url,
-            image_data IS NOT NULL AS has_image_data, is_active, created_at
+            image_data IS NOT NULL AS has_image_data, is_active,
+            EXISTS (
+              SELECT 1
+                FROM product_variants v
+                JOIN inventory_items i ON i.variant_id = v.id
+               WHERE v.product_id = products.id AND v.is_active = true
+                 AND i.on_hand > i.reserved
+            ) AS available,
+            COALESCE((
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'inventoryItemId', i.id,
+                  'label', v.label,
+                  'sku', v.sku,
+                  'available', i.on_hand > i.reserved
+                ) ORDER BY v.is_default DESC, v.label
+              )
+                FROM product_variants v
+                JOIN inventory_items i ON i.variant_id = v.id
+               WHERE v.product_id = products.id AND v.is_active = true
+            ), '[]'::jsonb) AS variants,
+            created_at
        FROM products WHERE store_id = $1 ORDER BY created_at DESC`,
     [records.store.id],
   );
@@ -489,35 +1005,369 @@ router.post("/seller/products", requireSeller, asyncHandler(async (request, resp
   ) {
     throw new HttpError(400, "The uploaded file does not match its image type.");
   }
-  const store = await queryOne<{ id: string; status: SellerRow["status"] }>(
-    `SELECT st.id, s.status
-       FROM stores st
+  const product = await inTransaction(async (client) => {
+    const storeResult = await client.query<{ id: string; status: SellerRow["status"] }>(
+      `SELECT st.id, s.status
+         FROM stores st
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE st.seller_id = $1
+        FOR UPDATE OF s`,
+      [request.sellerId],
+    );
+    const store = storeResult.rows[0];
+    if (!store) throw new HttpError(404, "Seller store not found.");
+    if (store.status !== "active") {
+      throw new HttpError(403, "Your seller account must be approved before managing products.");
+    }
+    const inserted = await client.query<ProductRow>(
+      `INSERT INTO products (
+         store_id, name, description, price, image_url, image_data, image_mime_type
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, store_id, name, description, price, image_url,
+                 image_data IS NOT NULL AS has_image_data, is_active, created_at`,
+      [
+        store.id,
+        input.name,
+        input.description,
+        input.price,
+        input.imageUrl,
+        imageData,
+        imageData ? input.imageMimeType : null,
+      ],
+    );
+    const createdProduct = inserted.rows[0]!;
+    const variant = await client.query<{ id: string }>(
+      `INSERT INTO product_variants (store_id, product_id, label, is_default)
+       VALUES ($1, $2, 'Standard', true)
+       RETURNING id`,
+      [store.id, createdProduct.id],
+    );
+    const inventory = await client.query<{ id: string }>(
+      `INSERT INTO inventory_items (variant_id) VALUES ($1) RETURNING id`,
+      [variant.rows[0]!.id],
+    );
+    await client.query(
+      `INSERT INTO stock_movements (
+         inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+         on_hand_before, on_hand_after, reserved_before, reserved_after,
+         reason, actor_type, idempotency_key, request_hash
+       )
+       VALUES ($1, 'initial', 0, 0, 0, 0, 0, 0,
+               'Création du produit : stock initial non renseigné', 'system', $2, $3)`,
+      [
+        inventory.rows[0]!.id,
+        randomUUID(),
+        requestHash({ productId: createdProduct.id, onHand: 0 }),
+      ],
+    );
+    return createdProduct;
+  });
+  response.status(201).json({ product: publicProduct({ ...product, available: false }) });
+}));
+
+router.get("/seller/inventory", requireSeller, asyncHandler(async (request, response) => {
+  const { limit, cursor } = validate(paginationSchema, request.query);
+  const result = await pool.query<InventoryRow>(
+    `SELECT i.id, v.id AS variant_id, p.id AS product_id, p.name AS product_name,
+            p.is_active AS product_is_active, v.label AS variant_label, v.sku,
+            v.attributes, v.is_default, v.is_active AS variant_is_active,
+            i.on_hand, i.reserved, i.low_stock_threshold, i.version, i.updated_at
+       FROM inventory_items i
+       JOIN product_variants v ON v.id = i.variant_id
+       JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+       JOIN stores st ON st.id = v.store_id
        JOIN sellers s ON s.id = st.seller_id
-      WHERE st.seller_id = $1`,
-    [request.sellerId],
+      WHERE s.id = $1 AND s.status = 'active'
+        AND ($2::uuid IS NULL OR v.id < $2::uuid)
+      ORDER BY v.id DESC
+      LIMIT $3`,
+    [request.sellerId, cursor ?? null, limit + 1],
   );
-  if (!store) throw new HttpError(404, "Seller store not found.");
-  if (store.status !== "active") {
-    throw new HttpError(403, "Your seller account must be approved before managing products.");
+  const hasMore = result.rows.length > limit;
+  const rows = result.rows.slice(0, limit);
+  response.json({
+    inventory: rows.map(publicInventory),
+    nextCursor: hasMore ? rows[rows.length - 1]!.variant_id : null,
+  });
+}));
+
+router.post("/seller/inventory/:inventoryItemId/movements", requireSeller, asyncHandler(async (request, response) => {
+  const { inventoryItemId } = validate(z.object({ inventoryItemId: z.string().uuid() }), request.params);
+  const input = validate(inventoryMovementSchema, request.body);
+  const hash = requestHash({
+    inventoryItemId,
+    quantityDelta: input.quantityDelta,
+    reason: input.reason,
+  });
+  const result = await inTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.idempotencyKey]);
+    const inventory = await client.query<InventoryRow>(
+      `SELECT i.id, v.id AS variant_id, p.id AS product_id, p.name AS product_name,
+              p.is_active AS product_is_active, v.label AS variant_label, v.sku,
+              v.attributes, v.is_default, v.is_active AS variant_is_active,
+              i.on_hand, i.reserved, i.low_stock_threshold, i.version, i.updated_at
+         FROM inventory_items i
+         JOIN product_variants v ON v.id = i.variant_id
+         JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE i.id = $1 AND s.id = $2 AND s.status = 'active'
+        FOR UPDATE OF i`,
+      [inventoryItemId, request.sellerId],
+    );
+    const current = inventory.rows[0];
+    if (!current) throw new HttpError(404, "Inventory item not found.");
+
+    const previousMovement = await client.query<StockMovementRow>(
+      `SELECT id, movement_type, delta_on_hand, on_hand_before, on_hand_after,
+              reason, created_at, request_hash
+         FROM stock_movements WHERE idempotency_key = $1`,
+      [input.idempotencyKey],
+    );
+    if (previousMovement.rows[0]) {
+      if (previousMovement.rows[0].request_hash !== hash) {
+        throw new HttpError(409, "This idempotency key was already used for a different request.");
+      }
+      return { inventory: current, movement: previousMovement.rows[0] };
+    }
+
+    const onHandBefore = Number(current.on_hand);
+    const reserved = Number(current.reserved);
+    const onHandAfter = onHandBefore + input.quantityDelta;
+    if (onHandAfter < reserved || onHandAfter > 2_147_483_647) {
+      throw new HttpError(409, "The adjustment cannot reduce stock below reserved units or exceed the stock limit.");
+    }
+    const movementType = input.quantityDelta > 0 ? "receipt" : "correction";
+    await client.query(
+      `UPDATE inventory_items
+          SET on_hand = $2, version = version + 1, updated_at = now()
+        WHERE id = $1`,
+      [inventoryItemId, onHandAfter],
+    );
+    const movement = await client.query<StockMovementRow>(
+      `INSERT INTO stock_movements (
+         inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+         on_hand_before, on_hand_after, reserved_before, reserved_after,
+         reason, actor_type, actor_seller_id, idempotency_key, request_hash
+       )
+       VALUES ($1, $2, $3, 0, $4, $5, $6, $6, $7, 'seller', $8, $9, $10)
+       RETURNING id, movement_type, delta_on_hand, on_hand_before, on_hand_after,
+                 reason, created_at, request_hash`,
+      [
+        inventoryItemId,
+        movementType,
+        input.quantityDelta,
+        onHandBefore,
+        onHandAfter,
+        reserved,
+        input.reason,
+        request.sellerId,
+        input.idempotencyKey,
+        hash,
+      ],
+    );
+    const createdMovement = movement.rows[0];
+    if (!createdMovement) throw new HttpError(500, "Stock movement was not created.");
+    return {
+      inventory: { ...current, on_hand: onHandAfter, version: Number(current.version) + 1, updated_at: new Date() },
+      movement: createdMovement,
+    };
+  });
+  response.json({
+    inventory: publicInventory(result.inventory),
+    movement: publicStockMovement(result.movement),
+  });
+}));
+
+router.patch("/seller/inventory/:inventoryItemId/threshold", requireSeller, asyncHandler(async (request, response) => {
+  const { inventoryItemId } = validate(z.object({ inventoryItemId: z.string().uuid() }), request.params);
+  const input = validate(inventoryThresholdSchema, request.body);
+  const hash = requestHash({
+    inventoryItemId,
+    lowStockThreshold: input.lowStockThreshold,
+    reason: input.reason,
+  });
+  const inventory = await inTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.idempotencyKey]);
+    const locked = await client.query<InventoryRow>(
+      `SELECT i.id, v.id AS variant_id, p.id AS product_id, p.name AS product_name,
+              p.is_active AS product_is_active, v.label AS variant_label, v.sku,
+              v.attributes, v.is_default, v.is_active AS variant_is_active,
+              i.on_hand, i.reserved, i.low_stock_threshold, i.version, i.updated_at
+         FROM inventory_items i
+         JOIN product_variants v ON v.id = i.variant_id
+         JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE i.id = $1 AND s.id = $2 AND s.status = 'active'
+        FOR UPDATE OF i`,
+      [inventoryItemId, request.sellerId],
+    );
+    const current = locked.rows[0];
+    if (!current) throw new HttpError(404, "Inventory item not found.");
+    const previousEvent = await client.query<{ request_hash: string }>(
+      "SELECT request_hash FROM inventory_threshold_events WHERE idempotency_key = $1",
+      [input.idempotencyKey],
+    );
+    if (previousEvent.rows[0]) {
+      if (previousEvent.rows[0].request_hash !== hash) {
+        throw new HttpError(409, "This idempotency key was already used for a different request.");
+      }
+      return current;
+    }
+
+    const previousThreshold = Number(current.low_stock_threshold);
+    await client.query(
+      `UPDATE inventory_items
+          SET low_stock_threshold = $2, version = version + 1, updated_at = now()
+        WHERE id = $1`,
+      [inventoryItemId, input.lowStockThreshold],
+    );
+    await client.query(
+      `INSERT INTO inventory_threshold_events (
+         inventory_item_id, threshold_before, threshold_after, reason,
+         actor_seller_id, idempotency_key, request_hash
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        inventoryItemId,
+        previousThreshold,
+        input.lowStockThreshold,
+        input.reason,
+        request.sellerId,
+        input.idempotencyKey,
+        hash,
+      ],
+    );
+    return {
+      ...current,
+      low_stock_threshold: input.lowStockThreshold,
+      version: Number(current.version) + 1,
+      updated_at: new Date(),
+    };
+  });
+  response.json({ inventory: publicInventory(inventory) });
+}));
+
+router.get("/seller/inventory/:inventoryItemId/movements", requireSeller, asyncHandler(async (request, response) => {
+  const { inventoryItemId } = validate(z.object({ inventoryItemId: z.string().uuid() }), request.params);
+  const { limit, cursor } = validate(
+    z.object({ limit: z.coerce.number().int().min(1).max(50).default(50), cursor: z.string().max(300).optional() }),
+    request.query,
+  );
+  const item = await queryOne<{ id: string }>(
+    `SELECT i.id
+       FROM inventory_items i
+       JOIN product_variants v ON v.id = i.variant_id
+       JOIN stores st ON st.id = v.store_id
+       JOIN sellers s ON s.id = st.seller_id
+      WHERE i.id = $1 AND s.id = $2 AND s.status = 'active'`,
+    [inventoryItemId, request.sellerId],
+  );
+  if (!item) throw new HttpError(404, "Inventory item not found.");
+  const decodedCursor = cursor ? decodeMovementCursor(cursor) : null;
+  const result = await pool.query(
+    `SELECT id, movement_type, delta_on_hand, delta_reserved, on_hand_before,
+            on_hand_after, reserved_before, reserved_after, reason, actor_type, created_at
+       FROM stock_movements
+      WHERE inventory_item_id = $1
+        AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $4`,
+    [inventoryItemId, decodedCursor?.createdAt ?? null, decodedCursor?.id ?? null, limit + 1],
+  );
+  const hasMore = result.rows.length > limit;
+  const movements = result.rows.slice(0, limit);
+  const lastMovement = movements[movements.length - 1] as { id: string; created_at: Date } | undefined;
+  response.json({
+    movements,
+    nextCursor: hasMore && lastMovement
+      ? Buffer.from(JSON.stringify({
+          createdAt: lastMovement.created_at.toISOString(),
+          id: lastMovement.id,
+        })).toString("base64url")
+      : null,
+  });
+}));
+
+router.post("/seller/products/:productId/variants", requireSeller, asyncHandler(async (request, response) => {
+  const { productId } = validate(z.object({ productId: z.string().uuid() }), request.params);
+  const input = validate(createVariantSchema, request.body);
+  try {
+    const variant = await inTransaction(async (client) => {
+      const product = await client.query<{ id: string; store_id: string }>(
+        `SELECT p.id, p.store_id
+           FROM products p
+           JOIN stores st ON st.id = p.store_id
+           JOIN sellers s ON s.id = st.seller_id
+          WHERE p.id = $1 AND s.id = $2 AND s.status = 'active'
+          FOR UPDATE OF p`,
+        [productId, request.sellerId],
+      );
+      if (!product.rows[0]) throw new HttpError(404, "Product not found.");
+      const inserted = await client.query<{ id: string; label: string; sku: string | null; attributes: Record<string, string> }>(
+        `INSERT INTO product_variants (store_id, product_id, label, sku, attributes)
+         VALUES ($1, $2, $3, $4, $5::jsonb)
+         RETURNING id, label, sku, attributes`,
+        [product.rows[0].store_id, productId, input.label, input.sku || null, JSON.stringify(input.attributes)],
+      );
+      const inventory = await client.query<{ id: string }>(
+        "INSERT INTO inventory_items (variant_id) VALUES ($1) RETURNING id",
+        [inserted.rows[0]!.id],
+      );
+      await client.query(
+        `INSERT INTO stock_movements (
+           inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+           on_hand_before, on_hand_after, reserved_before, reserved_after,
+           reason, actor_type, idempotency_key, request_hash
+         )
+         VALUES ($1, 'initial', 0, 0, 0, 0, 0, 0,
+                 'Création de la variante : stock initial non renseigné', 'system', $2, $3)`,
+        [
+          inventory.rows[0]!.id,
+          randomUUID(),
+          requestHash({ variantId: inserted.rows[0]!.id, onHand: 0 }),
+        ],
+      );
+      return { ...inserted.rows[0]!, inventoryItemId: inventory.rows[0]!.id };
+    });
+    response.status(201).json({ variant });
+  } catch (error) {
+    if (isUniqueViolation(error, "product_variants_sku_unique")
+      || isUniqueViolation(error, "product_variants_product_label_unique")) {
+      throw new HttpError(409, "A variant with this SKU or label already exists in this product.");
+    }
+    throw error;
   }
-  const inserted = await pool.query<ProductRow>(
-    `INSERT INTO products (
-       store_id, name, description, price, image_url, image_data, image_mime_type
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, store_id, name, description, price, image_url,
-               image_data IS NOT NULL AS has_image_data, is_active, created_at`,
-    [
-      store.id,
-      input.name,
-      input.description,
-      input.price,
-      input.imageUrl,
-      imageData,
-      imageData ? input.imageMimeType : null,
-    ],
-  );
-  response.status(201).json({ product: publicProduct(inserted.rows[0]!) });
+}));
+
+router.patch("/seller/variants/:variantId", requireSeller, asyncHandler(async (request, response) => {
+  const { variantId } = validate(z.object({ variantId: z.string().uuid() }), request.params);
+  validate(updateVariantSchema, request.body);
+  const result = await inTransaction(async (client) => {
+    const variant = await client.query<{ id: string; is_default: boolean; reserved: number }>(
+      `SELECT v.id, v.is_default, i.reserved
+         FROM product_variants v
+         JOIN inventory_items i ON i.variant_id = v.id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE v.id = $1 AND s.id = $2 AND s.status = 'active'
+        FOR UPDATE OF v, i`,
+      [variantId, request.sellerId],
+    );
+    const current = variant.rows[0];
+    if (!current) throw new HttpError(404, "Variant not found.");
+    if (current.is_default) throw new HttpError(409, "The default variant cannot be archived.");
+    if (Number(current.reserved) > 0) throw new HttpError(409, "A variant with reserved units cannot be archived.");
+    const archived = await client.query<{ id: string; is_active: boolean }>(
+      `UPDATE product_variants SET is_active = false, updated_at = now()
+        WHERE id = $1 RETURNING id, is_active`,
+      [variantId],
+    );
+    return archived.rows[0]!;
+  });
+  response.json({ variant: result });
 }));
 
 router.get("/seller/products/:id/image", requireSeller, asyncHandler(async (request, response) => {
@@ -587,7 +1437,28 @@ router.get("/public/stores/:slug", asyncHandler(async (request, response) => {
   if (!store) throw new HttpError(404, "Public store not found.");
   const products = await pool.query<ProductRow>(
     `SELECT id, store_id, name, description, price, image_url,
-            image_data IS NOT NULL AS has_image_data, is_active, created_at
+            image_data IS NOT NULL AS has_image_data, is_active,
+            EXISTS (
+              SELECT 1
+                FROM product_variants v
+                JOIN inventory_items i ON i.variant_id = v.id
+               WHERE v.product_id = products.id AND v.is_active = true
+                 AND i.on_hand > i.reserved
+            ) AS available,
+            COALESCE((
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'inventoryItemId', i.id,
+                  'label', v.label,
+                  'sku', v.sku,
+                  'available', i.on_hand > i.reserved
+                ) ORDER BY v.is_default DESC, v.label
+              )
+                FROM product_variants v
+                JOIN inventory_items i ON i.variant_id = v.id
+               WHERE v.product_id = products.id AND v.is_active = true
+            ), '[]'::jsonb) AS variants,
+            created_at
        FROM products WHERE store_id = $1 AND is_active = true ORDER BY created_at DESC`,
     [store.id],
   );
@@ -612,11 +1483,32 @@ router.get("/public/stores", asyncHandler(async (_request, response) => {
   const storeIds = storesResult.rows.map((store) => store.id);
   const productsResult = await pool.query<ProductRow>(
     `SELECT p.id, p.store_id, p.name, p.description, p.price, p.image_url,
-            p.has_image_data, p.is_active, p.created_at
+            p.has_image_data, p.is_active, p.available, p.variants, p.created_at
        FROM stores st
        CROSS JOIN LATERAL (
          SELECT id, store_id, name, description, price, image_url,
-                image_data IS NOT NULL AS has_image_data, is_active, created_at
+                image_data IS NOT NULL AS has_image_data, is_active,
+                EXISTS (
+                  SELECT 1
+                    FROM product_variants v
+                    JOIN inventory_items i ON i.variant_id = v.id
+                   WHERE v.product_id = products.id AND v.is_active = true
+                     AND i.on_hand > i.reserved
+                ) AS available,
+                COALESCE((
+                  SELECT jsonb_agg(
+                    jsonb_build_object(
+                      'inventoryItemId', i.id,
+                      'label', v.label,
+                      'sku', v.sku,
+                      'available', i.on_hand > i.reserved
+                    ) ORDER BY v.is_default DESC, v.label
+                  )
+                    FROM product_variants v
+                    JOIN inventory_items i ON i.variant_id = v.id
+                   WHERE v.product_id = products.id AND v.is_active = true
+                ), '[]'::jsonb) AS variants,
+                created_at
            FROM products
           WHERE store_id = st.id AND is_active = true
           ORDER BY created_at DESC

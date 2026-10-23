@@ -16,6 +16,24 @@ export const loginSchema = z.object({
   password: z.string().min(1).refine((value) => Buffer.byteLength(value, "utf8") <= 72, "password must be at most 72 UTF-8 bytes."),
 });
 
+export const customerRegisterSchema = z.object({
+  fullName: name("fullName"),
+  email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+  password: z.string().min(10).refine(
+    (value) => Buffer.byteLength(value, "utf8") <= 72,
+    "password must be at most 72 UTF-8 bytes.",
+  ),
+});
+
+export const cartItemSchema = z.object({
+  inventoryItemId: z.string().uuid(),
+  quantity: z.number().int().min(1).max(1_000_000),
+});
+
+export const cartQuantitySchema = z.object({
+  quantity: z.number().int().min(1).max(1_000_000),
+});
+
 export const sellerRejectionSchema = z.object({
   reason: z.string().trim().min(5).max(1000),
 });
@@ -117,4 +135,35 @@ export const updateProductSchema = z.object({
   ) {
     context.addIssue({ code: "custom", message: "Provide at least one product field to update." });
   }
+});
+
+export const inventoryMovementSchema = z.object({
+  quantityDelta: z.number().int().min(-1_000_000).max(1_000_000).refine((value) => value !== 0),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+
+export const inventoryThresholdSchema = z.object({
+  lowStockThreshold: z.number().int().min(0).max(1_000_000),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+
+export const createVariantSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  sku: z.string().trim().min(1).max(80).optional().nullable(),
+  attributes: z.record(z.string(), z.string().trim().min(1).max(80)).default({}),
+}).superRefine((variant, context) => {
+  if (Object.keys(variant.attributes).length > 20) {
+    context.addIssue({ code: "custom", message: "A variant can have at most 20 attributes." });
+  }
+});
+
+export const updateVariantSchema = z.object({
+  isActive: z.literal(false),
+});
+
+export const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(50),
+  cursor: z.string().uuid().optional(),
 });
