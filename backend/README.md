@@ -34,7 +34,7 @@ npm start
 
 `npm run typecheck` and `npm run lint` are also available. Do not commit `.env` or put credentials in source control.
 
-The database integration test for inventory, accounts, and phone verification creates and drops a uniquely named temporary schema. Run it only against a dedicated test database, never production:
+The database integration test for inventory and accounts creates and drops a uniquely named temporary schema. Run it only against a dedicated test database, never production:
 
 ```powershell
 $env:ORIVFIDE_TEST_DATABASE_URL = "postgresql://.../dedicated_test_database"
@@ -60,12 +60,6 @@ Required environment variables are checked at startup. Invalid or missing values
 | `DATABASE_POOL_MAX` | No | PostgreSQL pool size, default `10`. |
 | `JWT_EXPIRES_IN` | No | Token expiry such as `7d` or `15m`, default `7d`. |
 | `CORS_ORIGINS` | No | Comma-separated exact browser origins; defaults to `http://localhost:3000`. Wildcards are rejected. |
-| `WHATSAPP_ACCESS_TOKEN` | For customer registration | Meta WhatsApp Cloud API access token. |
-| `WHATSAPP_PHONE_NUMBER_ID` | For customer registration | Meta WhatsApp Business phone-number ID. |
-| `WHATSAPP_TEMPLATE_NAME` | For customer registration | Approved WhatsApp Authentication template name. Configure a body code parameter and a Copy code button. |
-| `WHATSAPP_TEMPLATE_LANGUAGE` | For customer registration | Exact language code configured for the approved template, such as `fr`. |
-| `WHATSAPP_GRAPH_API_VERSION` | For customer registration | Meta Graph API version, for example `vXX.0` as currently supported by your Meta app. |
-
 For Railway, set the service root directory to `/backend`. The checked-in `railway.json` configures the build, runs `npm run migrate` before deployment, starts the API with `npm start`, and checks `/health`. Set `DATABASE_URL`, `JWT_SECRET`, `ADMIN_API_KEY`, and `CORS_ORIGINS` in Railway's service variables; let Railway provide `PORT`. Point the web app's `BACKEND_API_URL` to the generated public service domain. For other providers, install dependencies with `npm ci`, run `npm run build`, apply `npm run migrate` as a release step, and start with `npm start`. The API uses Helmet, a 32 KB JSON body limit, HTTPS-only product image URLs, parameterized SQL, bcrypt password hashes, HS256 bearer tokens, and in-memory rate limits (use a shared rate-limit store when running multiple replicas). It handles `SIGINT` and `SIGTERM` by closing the HTTP server and PostgreSQL pool.
 
 Neon credentials are not included. The migration runner tracks applied SQL filenames in `schema_migrations` and runs migrations transactionally.
@@ -76,7 +70,7 @@ The target entities, stock reservation model, multi-seller order structure, stat
 
 The detailed seller inventory design, API contracts, migration behavior, and acceptance tests for Phase 3 are documented in [the Phase 3 stock design](../docs/phase-3-conception-stock.md). Migration `004_product_inventory.sql` has been applied to the confirmed Neon production database. New environments must apply it before deploying code that uses inventory tables.
 
-The customer account and multi-seller cart design is documented in [the Phase 4 cart and orders design](../docs/phase-4-conception-panier-commandes.md). Migration `005_customer_accounts_and_cart.sql` was applied to the Neon database configured in the local backend environment on 23 October 2026. The follow-up WhatsApp phone-verification increment adds migration `006_customer_phone_verification.sql`; it is not applied to Neon and must not be deployed until the Meta template and all `WHATSAPP_*` variables are configured and verified. There is still no order/checkout implementation, and Phase 3 database integration testing remains a prerequisite to transaction implementation.
+The customer account and multi-seller cart design is documented in [the Phase 4 cart and orders design](../docs/phase-4-conception-panier-commandes.md). Migration `005_customer_accounts_and_cart.sql` was applied to the Neon database configured in the local backend environment on 23 October 2026. Customer registration and access use email and password; WhatsApp verification is not part of the active flow. There is still no order/checkout implementation, and Phase 3 database integration testing remains a prerequisite to transaction implementation.
 
 ## Seller approval behavior
 
@@ -148,13 +142,11 @@ All routes require an active seller bearer token and restrict data to that selle
 
 Public product responses include only a boolean `available`; exact stock quantities remain private to the seller.
 
-### Customer accounts and cart (migrations 005 and 006)
+### Customer accounts and cart (migration 005)
 
-The following routes depend on `005_customer_accounts_and_cart.sql` and `006_customer_phone_verification.sql`; apply both to each target database before running this API version. Set every `WHATSAPP_*` variable together and create an approved Meta Authentication message template with the configured language, a body code parameter, and a Copy code button. The API sends a six-digit code that expires after five minutes; it limits attempts to five per challenge and sends to a phone number at most once per minute and three times per hour.
+The following routes depend on `005_customer_accounts_and_cart.sql`; apply it to each target database before running this API version.
 
-- `POST /api/customer/auth/register` accepts `{ "fullName": "Amina Example", "email": "amina@example.com", "password": "at-least-10-characters", "phone": "+237600000000" }`; returns a verification challenge without revealing whether the email exists.
-- `POST /api/customer/auth/register/verify` accepts `{ "challengeId": "<uuid>", "code": "123456" }`; creates the customer role/cart and returns a token only after a valid WhatsApp code. Existing accounts are linked only when the submitted password is correct.
-- `POST /api/customer/auth/phone/start` and `/api/customer/auth/phone/verify` let previously created, unverified customer accounts add and verify a unique Cameroon phone number.
+- `POST /api/customer/auth/register` accepts `{ "fullName": "Amina Example", "email": "amina@example.com", "password": "at-least-10-characters" }`; creates the customer role and cart and returns an authentication token. An existing account can be linked to the customer role only when the account is active and the submitted password matches.
 - `POST /api/customer/auth/login` uses the same email/password shape and returns a customer token with a distinct JWT audience/type from seller tokens.
 - `GET /api/customer/me` returns the authenticated customer's profile.
 - `GET /api/customer/cart` returns current product prices, available quantity and per-store line information.
@@ -163,7 +155,7 @@ The following routes depend on `005_customer_accounts_and_cart.sql` and `006_cus
 - `DELETE /api/customer/cart/items/:itemId` removes only an item belonging to the authenticated customer's active cart.
 - `DELETE /api/customer/cart/items` clears only the authenticated customer's active cart.
 
-Every verified Cameroon phone number can belong to at most one account. Customer cart/profile access requires a verified phone; existing customer accounts without one are directed through the WhatsApp verification flow. Customer tokens cannot be used on seller endpoints. Checkout, order creation, payments and delivery are not implemented; the web cart only provides an estimate and keeps confirmation disabled.
+Customer cart/profile access requires a valid customer token but no phone verification. Customer tokens cannot be used on seller endpoints. Checkout, order creation, payments and delivery are not implemented; the web cart only provides an estimate and keeps confirmation disabled.
 
 `GET /api/public/products/:id/image` serves images only for active products in public, approved stores. `GET /api/seller/products/:id/image` requires a seller token and serves that seller's own product images.
 

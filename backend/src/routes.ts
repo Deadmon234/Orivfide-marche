@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -17,9 +17,7 @@ import {
   createVariantSchema,
   cartItemSchema,
   cartQuantitySchema,
-  customerPhoneSchema,
   customerRegisterSchema,
-  customerVerificationSchema,
   inventoryMovementSchema,
   inventoryThresholdSchema,
   loginSchema,
@@ -48,24 +46,6 @@ type CustomerAccountRow = {
   password_hash: string;
   status: "active" | "disabled";
   created_at: Date;
-  phone_e164: string | null;
-  phone_verified_at: Date | null;
-};
-
-type CustomerVerificationChallengeRow = {
-  id: string;
-  purpose: "registration" | "phone_update";
-  account_id: string | null;
-  registration_allowed: boolean;
-  email: string | null;
-  full_name: string | null;
-  password_hash: string | null;
-  phone_e164: string;
-  code_hash: string;
-  delivery_status: "pending" | "sent" | "failed";
-  attempts: number;
-  expires_at: Date;
-  verified_at: Date | null;
 };
 
 type CartItemRow = {
@@ -229,7 +209,6 @@ function publicCustomer(row: CustomerAccountRow) {
     fullName: row.full_name,
     email: row.email,
     createdAt: row.created_at.toISOString(),
-    phoneVerified: row.phone_verified_at !== null,
   };
 }
 
@@ -344,132 +323,6 @@ function requestHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function verificationCodeHash(challengeId: string, code: string): string {
-  return createHmac("sha256", config.JWT_SECRET)
-    .update(`${challengeId}:${code}`)
-    .digest("hex");
-}
-
-function matchesVerificationCode(challengeId: string, code: string, expectedHash: string): boolean {
-  const actual = Buffer.from(verificationCodeHash(challengeId, code), "hex");
-  const expected = Buffer.from(expectedHash, "hex");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
-async function sendWhatsAppVerificationCode(phoneE164: string, code: string): Promise<void> {
-  const whatsapp = config.whatsapp;
-  if (!whatsapp) {
-    throw new HttpError(503, "La vérification WhatsApp n’est pas encore configurée.");
-  }
-
-  let providerResponse: globalThis.Response;
-  try {
-    providerResponse = await fetch(
-      `https://graph.facebook.com/${whatsapp.graphApiVersion}/${whatsapp.phoneNumberId}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${whatsapp.accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: phoneE164.slice(1),
-          type: "template",
-          template: {
-            name: whatsapp.templateName,
-            language: { code: whatsapp.templateLanguage },
-            components: [
-              { type: "body", parameters: [{ type: "text", text: code }] },
-              {
-                type: "button",
-                sub_type: "copy_code",
-                index: "0",
-                parameters: [{ type: "text", text: code }],
-              },
-            ],
-          },
-        }),
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-  } catch (error) {
-    console.error("WhatsApp verification delivery request failed", error instanceof Error ? error.name : "Unknown error");
-    throw new HttpError(502, "Le code WhatsApp n’a pas pu être envoyé. Réessayez plus tard.");
-  }
-
-  if (!providerResponse.ok) {
-    console.error("WhatsApp verification delivery rejected", providerResponse.status);
-    throw new HttpError(502, "Le code WhatsApp n’a pas pu être envoyé. Vérifiez le numéro puis réessayez.");
-  }
-}
-
-async function createCustomerVerificationChallenge(input: {
-  purpose: "registration" | "phone_update";
-  accountId?: string;
-  registrationAllowed?: boolean;
-  email?: string;
-  fullName?: string;
-  passwordHash?: string;
-  phoneE164: string;
-}): Promise<string> {
-  if (!config.whatsapp) {
-    throw new HttpError(503, "La vérification WhatsApp n’est pas encore configurée.");
-  }
-
-  const challengeId = randomUUID();
-  const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
-  await inTransaction(async (client) => {
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.phoneE164]);
-    await client.query(
-      "DELETE FROM customer_verification_challenges WHERE created_at < now() - interval '24 hours'",
-    );
-    const rate = await client.query<{ recent: number; hourly: number }>(
-      `SELECT count(*) FILTER (WHERE created_at >= now() - interval '60 seconds')::int AS recent,
-              count(*) FILTER (WHERE created_at >= now() - interval '1 hour')::int AS hourly
-         FROM customer_verification_challenges
-        WHERE phone_e164 = $1`,
-      [input.phoneE164],
-    );
-    if (Number(rate.rows[0]?.recent ?? 0) >= 1 || Number(rate.rows[0]?.hourly ?? 0) >= 3) {
-      throw new HttpError(429, "Trop de demandes de code pour ce numéro. Réessayez plus tard.");
-    }
-    await client.query(
-      `INSERT INTO customer_verification_challenges (
-         id, purpose, account_id, registration_allowed, email, full_name, password_hash,
-         phone_e164, code_hash, expires_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() + interval '5 minutes')`,
-      [
-        challengeId,
-        input.purpose,
-        input.accountId ?? null,
-        input.registrationAllowed ?? true,
-        input.email ?? null,
-        input.fullName ?? null,
-        input.passwordHash ?? null,
-        input.phoneE164,
-        verificationCodeHash(challengeId, code),
-      ],
-    );
-  });
-
-  try {
-    await sendWhatsAppVerificationCode(input.phoneE164, code);
-  } catch (error) {
-    await pool.query(
-      "UPDATE customer_verification_challenges SET delivery_status = 'failed' WHERE id = $1",
-      [challengeId],
-    );
-    throw error;
-  }
-  await pool.query(
-    "UPDATE customer_verification_challenges SET delivery_status = 'sent' WHERE id = $1",
-    [challengeId],
-  );
-  return challengeId;
-}
-
 function decodeMovementCursor(cursor: string): { createdAt: string; id: string } {
   let value: unknown;
   try {
@@ -540,17 +393,14 @@ async function requireActiveCustomer(
   next: NextFunction,
 ) {
   try {
-    const account = await queryOne<{ id: string; phone_verified_at: Date | null }>(
-      `SELECT a.id, a.phone_verified_at
+    const account = await queryOne<{ id: string }>(
+      `SELECT a.id
          FROM accounts a
          JOIN account_roles role ON role.account_id = a.id AND role.role = 'customer'
         WHERE a.id = $1 AND a.status = 'active'`,
       [request.customerId],
     );
     if (!account) throw new HttpError(401, "Customer account is unavailable.");
-    if (!account.phone_verified_at) {
-      throw new HttpError(403, "Vérifiez votre numéro WhatsApp pour accéder à votre espace client.");
-    }
     next();
   } catch (error) {
     next(error);
@@ -661,251 +511,61 @@ router.post("/auth/login", authLimiter, asyncHandler(async (request, response) =
 router.post("/customer/auth/register", customerAuthLimiter, asyncHandler(async (request, response) => {
   const input = validate(customerRegisterSchema, request.body);
   const passwordHash = await bcrypt.hash(input.password, 12);
-  const existingAccount = await queryOne<{ id: string; password_hash: string; status: "active" | "disabled" }>(
-    "SELECT id, password_hash, status FROM accounts WHERE email = $1",
-    [input.email],
-  );
-  const canLinkExisting = existingAccount
-    ? existingAccount.status === "active" && await bcrypt.compare(input.password, existingAccount.password_hash)
-    : false;
-  const challengeId = await createCustomerVerificationChallenge({
-    purpose: "registration",
-    accountId: canLinkExisting ? existingAccount?.id : undefined,
-    registrationAllowed: !existingAccount || canLinkExisting,
-    email: input.email,
-    fullName: input.fullName,
-    passwordHash,
-    phoneE164: input.phone,
-  });
-  response.status(202).json({
-    challengeId,
-    message: "Si ce numéro peut être vérifié, un code WhatsApp vous a été envoyé.",
-  });
-}));
-
-router.post("/customer/auth/register/verify", customerAuthLimiter, asyncHandler(async (request, response) => {
-  const input = validate(customerVerificationSchema, request.body);
-  const result = await inTransaction(async (client) => {
-    const challengeResult = await client.query<CustomerVerificationChallengeRow>(
-      `SELECT id, purpose, account_id, registration_allowed, email, full_name, password_hash,
-              phone_e164, code_hash, delivery_status, attempts, expires_at, verified_at
-         FROM customer_verification_challenges
-        WHERE id = $1
-        FOR UPDATE`,
-      [input.challengeId],
-    );
-    const challenge = challengeResult.rows[0];
-    if (!challenge
-      || challenge.purpose !== "registration"
-      || challenge.verified_at !== null
-      || challenge.delivery_status !== "sent"
-      || challenge.attempts >= 5
-      || challenge.expires_at.getTime() <= Date.now()) {
-      return { status: "invalid" as const };
-    }
-    if (!matchesVerificationCode(challenge.id, input.code, challenge.code_hash)) {
-      await client.query(
-        "UPDATE customer_verification_challenges SET attempts = attempts + 1 WHERE id = $1",
-        [challenge.id],
-      );
-      return { status: "invalid" as const };
-    }
-
-    if (!challenge.registration_allowed) {
-      await client.query(
-        `UPDATE customer_verification_challenges
-            SET verified_at = now(), email = NULL, full_name = NULL, password_hash = NULL
-          WHERE id = $1`,
-        [challenge.id],
-      );
-      return { status: "invalid" as const };
-    }
-    const existingResult = await client.query<CustomerAccountRow>(
-      `SELECT id, email, full_name, password_hash, status, created_at, phone_e164, phone_verified_at
+  const account = await inTransaction(async (client) => {
+    const existing = await client.query<CustomerAccountRow>(
+      `SELECT id, email, full_name, password_hash, status, created_at
          FROM accounts
         WHERE email = $1
         FOR UPDATE`,
-      [challenge.email],
+      [input.email],
     );
-    let account = existingResult.rows[0];
-    if (account && (account.status !== "active" || account.id !== challenge.account_id)) {
-      return { status: "invalid" as const };
-    }
-    if (!account && challenge.account_id) return { status: "invalid" as const };
-    const phoneOwner = await client.query<{ id: string }>(
-      `SELECT id FROM accounts
-        WHERE phone_e164 = $1
-          AND ($2::uuid IS NULL OR id <> $2)
-        LIMIT 1`,
-      [challenge.phone_e164, account?.id ?? null],
-    );
-    if (phoneOwner.rows[0]) {
-      await client.query(
-        `UPDATE customer_verification_challenges
-            SET verified_at = now(), email = NULL, full_name = NULL, password_hash = NULL
-          WHERE id = $1`,
-        [challenge.id],
-      );
-      return { status: "phone-conflict" as const };
-    }
-
-    if (account) {
-      if (account.phone_verified_at && account.phone_e164 !== challenge.phone_e164) {
-        await client.query(
-          `UPDATE customer_verification_challenges
-              SET verified_at = now(), email = NULL, full_name = NULL, password_hash = NULL
-            WHERE id = $1`,
-          [challenge.id],
-        );
-        return { status: "phone-conflict" as const };
+    let customer = existing.rows[0];
+    if (customer) {
+      if (customer.status !== "active" || !(await bcrypt.compare(input.password, customer.password_hash))) {
+        throw new HttpError(409, "Cette adresse e-mail est déjà associée à un compte.");
       }
-      const updated = await client.query<CustomerAccountRow>(
-        `UPDATE accounts
-            SET phone_e164 = $2, phone_verified_at = now(), updated_at = now()
-          WHERE id = $1
-          RETURNING id, email, full_name, password_hash, status, created_at, phone_e164, phone_verified_at`,
-        [account.id, challenge.phone_e164],
-      );
-      account = updated.rows[0]!;
       await client.query(
         `INSERT INTO account_roles (account_id, role)
          VALUES ($1, 'customer')
          ON CONFLICT (account_id, role) DO NOTHING`,
-        [account.id],
+        [customer.id],
       );
       await client.query(
         `INSERT INTO carts (account_id, status)
          VALUES ($1, 'active')
          ON CONFLICT (account_id) WHERE status = 'active' DO NOTHING`,
-        [account.id],
+        [customer.id],
       );
-    } else {
-      const created = await client.query<CustomerAccountRow>(
-        `INSERT INTO accounts (
-           email, full_name, password_hash, phone_e164, phone_verified_at
-         )
-         VALUES ($1, $2, $3, $4, now())
-         RETURNING id, email, full_name, password_hash, status, created_at, phone_e164, phone_verified_at`,
-        [challenge.email, challenge.full_name, challenge.password_hash, challenge.phone_e164],
-      );
-      account = created.rows[0]!;
-      await client.query(
-        "INSERT INTO account_roles (account_id, role) VALUES ($1, 'customer')",
-        [account.id],
-      );
-      await client.query("INSERT INTO carts (account_id, status) VALUES ($1, 'active')", [account.id]);
+      return customer;
     }
-    await client.query(
-      `UPDATE customer_verification_challenges
-          SET verified_at = now(), email = NULL, full_name = NULL, password_hash = NULL
-        WHERE id = $1`,
-      [challenge.id],
+
+    const created = await client.query<CustomerAccountRow>(
+      `INSERT INTO accounts (email, full_name, password_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, full_name, password_hash, status, created_at`,
+      [input.email, input.fullName, passwordHash],
     );
-    return { status: "verified" as const, account };
+    customer = created.rows[0]!;
+    await client.query(
+      "INSERT INTO account_roles (account_id, role) VALUES ($1, 'customer')",
+      [customer.id],
+    );
+    await client.query("INSERT INTO carts (account_id, status) VALUES ($1, 'active')", [customer.id]);
+    return customer;
   }).catch((error: unknown) => {
-    if (isUniqueViolation(error, "accounts_verified_phone_unique")) {
-      throw new HttpError(409, "Ce numéro WhatsApp est déjà associé à un autre compte.");
-    }
     if (isUniqueViolation(error, "accounts_email_unique")) {
       throw new HttpError(409, "Cette adresse e-mail est déjà associée à un compte.");
     }
     throw error;
   });
-
-  if (result.status === "invalid") {
-    throw new HttpError(400, "Le code est invalide ou expiré. Recommencez l’inscription si nécessaire.");
-  }
-  if (result.status === "phone-conflict") {
-    throw new HttpError(409, "Ce numéro WhatsApp est déjà associé à un autre compte. Connectez-vous à ce compte.");
-  }
-  const token = await createCustomerAccessToken(result.account.id);
-  response.json({ token, customer: publicCustomer(result.account) });
-}));
-
-router.post("/customer/auth/phone/start", requireCustomer, customerAuthLimiter, asyncHandler(async (request, response) => {
-  const input = validate(customerPhoneSchema, request.body);
-  const account = await queryOne<{ id: string }>(
-    `SELECT id FROM accounts
-      WHERE id = $1 AND status = 'active'
-        AND EXISTS (
-          SELECT 1 FROM account_roles
-           WHERE account_id = $1 AND role = 'customer'
-        )`,
-    [request.customerId],
-  );
-  if (!account) throw new HttpError(401, "Customer account is unavailable.");
-  const challengeId = await createCustomerVerificationChallenge({
-    purpose: "phone_update",
-    accountId: account.id,
-    phoneE164: input.phone,
-  });
-  response.status(202).json({ challengeId, message: "Un code WhatsApp vous a été envoyé." });
-}));
-
-router.post("/customer/auth/phone/verify", requireCustomer, customerAuthLimiter, asyncHandler(async (request, response) => {
-  const input = validate(customerVerificationSchema, request.body);
-  const result = await inTransaction(async (client) => {
-    const challengeResult = await client.query<CustomerVerificationChallengeRow>(
-      `SELECT id, purpose, account_id, registration_allowed, email, full_name, password_hash,
-              phone_e164, code_hash, delivery_status, attempts, expires_at, verified_at
-         FROM customer_verification_challenges
-        WHERE id = $1 AND account_id = $2
-        FOR UPDATE`,
-      [input.challengeId, request.customerId],
-    );
-    const challenge = challengeResult.rows[0];
-    if (!challenge
-      || challenge.purpose !== "phone_update"
-      || challenge.verified_at !== null
-      || challenge.delivery_status !== "sent"
-      || challenge.attempts >= 5
-      || challenge.expires_at.getTime() <= Date.now()) {
-      return "invalid" as const;
-    }
-    if (!matchesVerificationCode(challenge.id, input.code, challenge.code_hash)) {
-      await client.query(
-        "UPDATE customer_verification_challenges SET attempts = attempts + 1 WHERE id = $1",
-        [challenge.id],
-      );
-      return "invalid" as const;
-    }
-    const owner = await client.query<{ id: string }>(
-      `SELECT id FROM accounts
-        WHERE phone_e164 = $1 AND id <> $2
-        LIMIT 1`,
-      [challenge.phone_e164, request.customerId],
-    );
-    if (owner.rows[0]) return "phone-conflict" as const;
-    const updated = await client.query(
-      `UPDATE accounts
-          SET phone_e164 = $2, phone_verified_at = now(), updated_at = now()
-        WHERE id = $1 AND status = 'active'`,
-      [request.customerId, challenge.phone_e164],
-    );
-    if (updated.rowCount !== 1) return "invalid" as const;
-    await client.query(
-      "UPDATE customer_verification_challenges SET verified_at = now() WHERE id = $1",
-      [challenge.id],
-    );
-    return "verified" as const;
-  }).catch((error: unknown) => {
-    if (isUniqueViolation(error, "accounts_verified_phone_unique")) {
-      throw new HttpError(409, "Ce numéro WhatsApp est déjà associé à un autre compte.");
-    }
-    throw error;
-  });
-  if (result === "invalid") throw new HttpError(400, "Le code est invalide ou expiré. Demandez-en un nouveau.");
-  if (result === "phone-conflict") {
-    throw new HttpError(409, "Ce numéro WhatsApp est déjà associé à un autre compte.");
-  }
-  response.json({ message: "Votre numéro WhatsApp est vérifié." });
+  const token = await createCustomerAccessToken(account.id);
+  response.status(201).json({ token, customer: publicCustomer(account) });
 }));
 
 router.post("/customer/auth/login", customerAuthLimiter, asyncHandler(async (request, response) => {
   const input = validate(loginSchema, request.body);
   const account = await queryOne<CustomerAccountRow>(
-    `SELECT a.id, a.email, a.full_name, a.password_hash, a.status, a.created_at,
-            a.phone_e164, a.phone_verified_at
+    `SELECT a.id, a.email, a.full_name, a.password_hash, a.status, a.created_at
        FROM accounts a
        JOIN account_roles role ON role.account_id = a.id AND role.role = 'customer'
       WHERE a.email = $1 AND a.status = 'active'`,
@@ -920,7 +580,7 @@ router.post("/customer/auth/login", customerAuthLimiter, asyncHandler(async (req
 
 router.get("/customer/me", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
   const account = await queryOne<CustomerAccountRow>(
-    `SELECT id, email, full_name, password_hash, status, created_at, phone_e164, phone_verified_at
+    `SELECT id, email, full_name, password_hash, status, created_at
        FROM accounts WHERE id = $1 AND status = 'active'`,
     [request.customerId],
   );

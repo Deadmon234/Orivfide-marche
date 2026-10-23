@@ -6,9 +6,6 @@ import { Eye, EyeOff } from "lucide-react";
 import {
   registerCustomer,
   signInCustomer,
-  startCustomerPhoneVerification,
-  verifyCustomerPhone,
-  verifyCustomerRegistration,
 } from "@/app/client/actions";
 
 const initialState = { message: "", success: false };
@@ -25,19 +22,6 @@ export function CustomerRegisterForm() {
       <label className="seller-field">
         Adresse e-mail
         <input name="email" type="email" autoComplete="email" required maxLength={254} />
-      </label>
-      <label className="seller-field">
-        Numéro WhatsApp camerounais
-        <input
-          name="phone"
-          type="tel"
-          autoComplete="tel"
-          inputMode="tel"
-          placeholder="+2376XXXXXXXX"
-          pattern="\+237[0-9]{9}"
-          required
-        />
-        <span className="text-xs font-normal text-orivfide-muted">Un code de vérification sera envoyé sur WhatsApp.</span>
       </label>
       <label className="seller-field">
         Mot de passe
@@ -65,10 +49,6 @@ export function CustomerRegisterForm() {
         </span>
         <span className="text-xs font-normal text-orivfide-muted">10 caractères minimum</span>
       </label>
-      <label className="flex items-start gap-3 text-sm leading-6 text-orivfide-muted">
-        <input name="whatsappConsent" type="checkbox" required className="mt-1 accent-orivfide-red" />
-        <span>J’accepte de recevoir sur WhatsApp le code nécessaire à la vérification de mon numéro.</span>
-      </label>
       {state.message && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800">{state.message}</p>}
       <button disabled={pending} className="min-h-11 rounded-full bg-orivfide-red px-5 text-sm font-semibold text-white disabled:opacity-60">
         {pending ? "Création…" : "Créer mon compte"}
@@ -76,58 +56,6 @@ export function CustomerRegisterForm() {
       <p className="text-center text-sm text-orivfide-muted">
         Déjà inscrit ? <Link className="font-semibold text-orivfide-red" href="/client/connexion">Se connecter</Link>
       </p>
-    </form>
-  );
-}
-
-export function CustomerPhoneStartForm() {
-  const [state, action, pending] = useActionState(startCustomerPhoneVerification, initialState);
-  return (
-    <form action={action} className="grid gap-4">
-      <label className="seller-field">
-        Numéro WhatsApp camerounais
-        <input
-          name="phone"
-          type="tel"
-          autoComplete="tel"
-          inputMode="tel"
-          placeholder="+2376XXXXXXXX"
-          pattern="\+237[0-9]{9}"
-          required
-        />
-      </label>
-      <label className="flex items-start gap-3 text-sm leading-6 text-orivfide-muted">
-        <input name="whatsappConsent" type="checkbox" required className="mt-1 accent-orivfide-red" />
-        <span>J’accepte de recevoir sur WhatsApp le code nécessaire à la vérification de mon numéro.</span>
-      </label>
-      {state.message && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800">{state.message}</p>}
-      <button disabled={pending} className="min-h-11 rounded-full bg-orivfide-red px-5 text-sm font-semibold text-white disabled:opacity-60">
-        {pending ? "Envoi…" : "Envoyer un code WhatsApp"}
-      </button>
-    </form>
-  );
-}
-
-export function CustomerPhoneCodeForm({
-  challengeId,
-  flow,
-}: {
-  challengeId: string;
-  flow: "registration" | "account";
-}) {
-  const actionForFlow = flow === "registration" ? verifyCustomerRegistration : verifyCustomerPhone;
-  const [state, action, pending] = useActionState(actionForFlow, initialState);
-  return (
-    <form action={action} className="grid gap-4">
-      <input type="hidden" name="challengeId" value={challengeId} />
-      <label className="seller-field">
-        Code reçu sur WhatsApp
-        <input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" minLength={6} maxLength={6} required />
-      </label>
-      {state.message && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800">{state.message}</p>}
-      <button disabled={pending} className="min-h-11 rounded-full bg-orivfide-red px-5 text-sm font-semibold text-white disabled:opacity-60">
-        {pending ? "Vérification…" : "Vérifier mon numéro"}
-      </button>
     </form>
   );
 }

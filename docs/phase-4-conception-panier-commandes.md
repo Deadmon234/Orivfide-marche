@@ -2,10 +2,10 @@
 
 **Version :** 0.2 — conception et premier incrément  
 **Date :** 23 octobre 2026  
-**Statut :** comptes et panier; vérification de téléphone WhatsApp ajoutée au code; migration 006 en attente; commande non implémentée
+**Statut :** comptes et panier par e-mail/mot de passe; commande non implémentée
 **Dépendances :** [Architecture et décisions des phases](./phase-2-architecture-et-modele-de-donnees.md), [Conception du stock phase 3](./phase-3-conception-stock.md)
 
-> La migration `005_customer_accounts_and_cart.sql` et le premier parcours compte-panier ont été appliqués/testés manuellement sur le déploiement Neon/Vercel le 23 octobre 2026. Le suivi ajoute maintenant une vérification WhatsApp avant accès client et une unicité du numéro vérifié; la migration `006_customer_phone_verification.sql` n’est pas appliquée. La configuration Meta et un modèle Authentication approuvé restent requis avant déploiement. Aucune commande, réservation, confirmation, livraison ou paiement n’est implémenté.
+> La migration `005_customer_accounts_and_cart.sql` et le parcours compte-panier ont été appliqués/testés manuellement sur le déploiement Neon/Vercel le 23 octobre 2026. L’accès client se fait par adresse e-mail et mot de passe; aucune vérification WhatsApp n’est requise ou active. Aucune commande, réservation, confirmation, livraison ou paiement n’est implémenté.
 
 ## 1. Objectif et limites
 
@@ -179,10 +179,9 @@ Ne pas exécuter une migration de cette phase sur Neon production avant revue de
 
 - **Ajouté au code :** migration 005 créant comptes/rôles, rattachant les vendeurs existants par leur UUID sans changer leurs hashes, et créant paniers actifs et lignes.
 - **Ajouté au code :** tokens client distincts des tokens vendeur; inscription, connexion, profil et routes du panier propriétaire.
-- **Identité unique :** une adresse e-mail normalisée (espaces retirés, minuscules) correspond à un seul compte. Un numéro camerounais vérifié ne peut être associé qu’à un seul compte; les rôles client et vendeur peuvent être réunis sur le compte existant après authentification par mot de passe et vérification du téléphone.
-- **WhatsApp OTP ajouté au code :** code à six chiffres, empreinte HMAC, expiration cinq minutes, cinq essais maximum, limitation par numéro, et aucune création/liaison de compte avant vérification. Les comptes clients existants sans téléphone vérifié doivent le vérifier avant d’accéder au profil et au panier.
+- **Identité unique :** une adresse e-mail normalisée (espaces retirés, minuscules) correspond à un seul compte. Les rôles client et vendeur peuvent être réunis sur le compte existant après authentification par mot de passe.
 - **Ajouté au code :** choix de variante disponible depuis les fiches publiques; prix et disponibilité relus côté serveur lors de l’ajout et du changement de quantité. Le panier n’écrit pas dans le stock.
 - **Ajouté au code :** pages d’inscription, connexion et panier estimatif; aucun bouton de confirmation actif.
 - **Vérifié :** migration 005 présente sur Neon; l’API Railway répond. Le parcours Vercel compte-panier a été testé manuellement, le produit de test a été retiré du panier et le stock n’a pas été modifié. Deux comptes de test avec des adresses distinctes restent dans Neon; aucun doublon d’e-mail normalisé n’a été détecté.
-- **Pas encore validé :** migration 006 et intégration réelle Meta/WhatsApp; les identifiants Meta et le modèle Authentication approuvé ne sont pas configurés. La migration 006 n’est pas appliquée et ce code n’est pas déployé.
-- **À faire ensuite :** configurer le modèle et les variables WhatsApp dans Railway, valider l’intégration sur un numéro contrôlé, puis déployer les migrations et le web de manière coordonnée. Le checkout reste une étape séparée.
+- **Connexion client :** création et connexion par e-mail et mot de passe; aucun code WhatsApp n’est envoyé. La migration 006 d’essai WhatsApp a été retirée avant application en production.
+- **À faire ensuite :** concevoir et implémenter la commande/checkout après validation des exigences stock, paiement et livraison.

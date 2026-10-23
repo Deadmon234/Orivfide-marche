@@ -23,18 +23,6 @@ export const customerRegisterSchema = z.object({
     (value) => Buffer.byteLength(value, "utf8") <= 72,
     "password must be at most 72 UTF-8 bytes.",
   ),
-  phone: z.string().trim().regex(/^\+237[0-9]{9}$/, "phone must be a Cameroon number in +237XXXXXXXXX format."),
-  whatsappConsent: z.literal(true),
-});
-
-export const customerVerificationSchema = z.object({
-  challengeId: z.string().uuid(),
-  code: z.string().regex(/^[0-9]{6}$/, "Enter the six-digit verification code."),
-});
-
-export const customerPhoneSchema = z.object({
-  phone: z.string().trim().regex(/^\+237[0-9]{9}$/, "phone must be a Cameroon number in +237XXXXXXXXX format."),
-  whatsappConsent: z.literal(true),
 });
 
 export const cartItemSchema = z.object({
