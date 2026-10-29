@@ -11,9 +11,20 @@ export const instant = false;
 export default async function CustomerLoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ inscription?: string; retour?: string }>;
+  searchParams: Promise<{
+    inscription?: string;
+    retour?: string;
+    inventoryItemId?: string;
+    quantity?: string;
+  }>;
 }) {
   const params = await searchParams;
+  const pendingItem = params.inventoryItemId && params.quantity
+    ? { inventoryItemId: params.inventoryItemId, quantity: params.quantity }
+    : undefined;
+  const signupParams = pendingItem
+    ? new URLSearchParams(pendingItem).toString()
+    : "";
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf7f6] px-5 py-10">
       <section className="w-full max-w-md rounded-3xl border border-black/5 bg-white p-6 shadow-sm sm:p-9">
@@ -30,7 +41,12 @@ export default async function CustomerLoginPage({
             Connectez-vous pour ajouter un article à votre panier.
           </p>
         )}
-        <div className="mt-7"><CustomerLoginForm /></div>
+        <div className="mt-7">
+          <CustomerLoginForm
+            pendingItem={pendingItem}
+            registerHref={signupParams ? `/client/inscription?${signupParams}` : "/client/inscription"}
+          />
+        </div>
       </section>
     </main>
   );

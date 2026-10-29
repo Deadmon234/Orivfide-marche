@@ -34,6 +34,27 @@ export const cartQuantitySchema = z.object({
   quantity: z.number().int().min(1).max(1_000_000),
 });
 
+export const checkoutPreviewSchema = z.object({}).strict();
+
+export const checkoutConfirmSchema = z.object({
+  idempotencyKey: z.string().uuid(),
+  delivery: z.object({
+    fullName: name("delivery fullName"),
+    phone: z.string().trim().min(6).max(32),
+    addressLine1: z.string().trim().min(5).max(250),
+    addressLine2: z.string().trim().max(250).optional().default(""),
+    city: z.string().trim().min(2).max(120),
+    region: z.string().trim().min(2).max(120),
+    country: z.literal("CM"),
+  }).strict(),
+}).strict();
+
+export const mtnPaymentInitiateSchema = z.object({
+  orderId: z.string().uuid(),
+  payerPhone: z.string().trim().regex(/^237[0-9]{9}$/, "Le numéro MTN doit commencer par 237 et contenir 12 chiffres."),
+  idempotencyKey: z.string().uuid(),
+}).strict();
+
 export const sellerRejectionSchema = z.object({
   reason: z.string().trim().min(5).max(1000),
 });
@@ -148,6 +169,11 @@ export const inventoryThresholdSchema = z.object({
   reason: z.string().trim().min(3).max(500),
   idempotencyKey: z.string().uuid(),
 });
+
+export const sellerOrderStatusSchema = z.object({
+  status: z.enum(["confirmed", "preparing", "handed_to_carrier", "in_transit", "delivered", "cancelled", "delivery_failed", "returned", "disputed"]),
+  reason: z.string().trim().min(3).max(500),
+}).strict();
 
 export const createVariantSchema = z.object({
   label: z.string().trim().min(1).max(120),

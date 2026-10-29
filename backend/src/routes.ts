@@ -12,17 +12,22 @@ import {
 import { config } from "./config.js";
 import { inTransaction, pool, queryOne } from "./db.js";
 import { HttpError } from "./errors.js";
+import { getMtnPaymentStatus, mtnPaymentConfigured, requestMtnPayment } from "./mtn-payment.js";
 import {
   createProductSchema,
   createVariantSchema,
   cartItemSchema,
   cartQuantitySchema,
+  checkoutConfirmSchema,
+  checkoutPreviewSchema,
   customerRegisterSchema,
   inventoryMovementSchema,
   inventoryThresholdSchema,
   loginSchema,
+  mtnPaymentInitiateSchema,
   paginationSchema,
   registerSchema,
+  sellerOrderStatusSchema,
   sellerRejectionSchema,
   updateStoreSchema,
   updateProductSchema,
@@ -51,7 +56,10 @@ type CustomerAccountRow = {
 type CartItemRow = {
   id: string;
   inventory_item_id: string;
+  variant_id: string;
   quantity: number;
+  seller_id?: string;
+  seller_name?: string;
   product_id: string;
   product_name: string;
   product_price: number;
@@ -735,6 +743,667 @@ router.delete("/customer/cart/items", requireCustomer, requireActiveCustomer, as
     [request.customerId],
   );
   response.json({ message: "Panier vidé." });
+}));
+
+router.get("/customer/orders", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const result = await pool.query<{
+    id: string;
+    public_number: string;
+    status: string;
+    subtotal_xaf: number;
+    currency: string;
+    created_at: Date;
+    updated_at: Date;
+  }>(
+    `SELECT id, public_number, status, subtotal_xaf, currency, created_at, updated_at
+       FROM orders WHERE account_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [request.customerId],
+  );
+  response.json({
+    orders: result.rows.map((row) => ({
+      id: row.id,
+      publicNumber: row.public_number,
+      status: row.status,
+      subtotalXaf: Number(row.subtotal_xaf),
+      currency: row.currency,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    })),
+  });
+}));
+
+router.get("/customer/orders/:orderId", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const { orderId } = validate(z.object({ orderId: z.string().uuid() }), request.params);
+  const order = await queryOne<{
+    id: string;
+    public_number: string;
+    status: string;
+    subtotal_xaf: number;
+    currency: string;
+    created_at: Date;
+    updated_at: Date;
+  }>(
+    `SELECT id, public_number, status, subtotal_xaf, currency, created_at, updated_at
+       FROM orders WHERE id = $1 AND account_id = $2`,
+    [orderId, request.customerId],
+  );
+  if (!order) throw new HttpError(404, "Commande introuvable.");
+
+  const sellerOrders = await pool.query<{
+    id: string; status: string; subtotal_xaf: number; delivery_xaf: number | null;
+    store_name: string; store_slug: string; created_at: Date; updated_at: Date;
+  }>(
+    `SELECT so.id, so.status, so.subtotal_xaf, so.delivery_xaf,
+            st.name AS store_name, st.slug AS store_slug, so.created_at, so.updated_at
+       FROM seller_orders so JOIN stores st ON st.id = so.store_id
+      WHERE so.order_id = $1 ORDER BY st.name`,
+    [order.id],
+  );
+
+  const sellerOrderIds = sellerOrders.rows.map((row) => row.id);
+  const items = sellerOrderIds.length === 0 ? [] : (await pool.query<{
+    id: string; seller_order_id: string; product_name_snapshot: string;
+    variant_label_snapshot: string; sku_snapshot: string | null;
+    unit_price_xaf: number; quantity: number; line_total_xaf: number;
+  }>(
+    `SELECT id, seller_order_id, product_name_snapshot, variant_label_snapshot, sku_snapshot,
+            unit_price_xaf, quantity, line_total_xaf
+       FROM order_items WHERE seller_order_id = ANY($1::uuid[]) ORDER BY product_name_snapshot`,
+    [sellerOrderIds],
+  )).rows;
+
+  const events = await pool.query<{
+    id: string; seller_order_id: string | null; previous_status: string | null;
+    new_status: string; actor_type: string; reason: string; created_at: Date;
+  }>(
+    `SELECT id, seller_order_id, previous_status, new_status, actor_type, reason, created_at
+       FROM order_status_events
+      WHERE order_id = $1 OR seller_order_id = ANY($2::uuid[])
+      ORDER BY created_at DESC`,
+    [order.id, sellerOrderIds],
+  );
+
+  response.json({
+    order: {
+      id: order.id,
+      publicNumber: order.public_number,
+      status: order.status,
+      subtotalXaf: Number(order.subtotal_xaf),
+      currency: order.currency,
+      createdAt: order.created_at.toISOString(),
+      updatedAt: order.updated_at.toISOString(),
+      sellerOrders: sellerOrders.rows.map((sellerOrder) => ({
+        id: sellerOrder.id,
+        status: sellerOrder.status,
+        subtotalXaf: Number(sellerOrder.subtotal_xaf),
+        deliveryXaf: sellerOrder.delivery_xaf,
+        store: { name: sellerOrder.store_name, slug: sellerOrder.store_slug },
+        createdAt: sellerOrder.created_at.toISOString(),
+        updatedAt: sellerOrder.updated_at.toISOString(),
+        items: items.filter((item) => item.seller_order_id === sellerOrder.id).map((item) => ({
+          id: item.id,
+          productName: item.product_name_snapshot,
+          variantLabel: item.variant_label_snapshot,
+          sku: item.sku_snapshot,
+          unitPriceXaf: Number(item.unit_price_xaf),
+          quantity: Number(item.quantity),
+          lineTotalXaf: Number(item.line_total_xaf),
+        })),
+      })),
+      events: events.rows.map((event) => ({
+        id: event.id,
+        sellerOrderId: event.seller_order_id,
+        previousStatus: event.previous_status,
+        newStatus: event.new_status,
+        actorType: event.actor_type,
+        reason: event.reason,
+        createdAt: event.created_at.toISOString(),
+      })),
+    },
+  });
+}));
+
+router.post("/checkout/preview", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  validate(checkoutPreviewSchema, request.body ?? {});
+  const cartId = await getOrCreateActiveCart(request.customerId!);
+  const items = await customerCartItems(cartId);
+  if (items.length === 0) throw new HttpError(409, "Le panier est vide.");
+
+  const unavailable = items.filter((item) => !item.product_is_active || !item.variant_is_active
+    || !item.store_is_public || !item.seller_is_active
+    || item.quantity > Math.max(0, Number(item.on_hand) - Number(item.reserved)));
+  if (unavailable.length > 0) {
+    throw new HttpError(409, "Le panier contient un article indisponible ou une quantité dépassée.");
+  }
+
+  const subtotal = items.reduce((total, item) => total + BigInt(item.product_price) * BigInt(item.quantity), 0n);
+  const stores = new Map<string, { storeId: string; name: string; subtotalXaf: string }>();
+  for (const item of items) {
+    const lineTotal = BigInt(item.product_price) * BigInt(item.quantity);
+    const current = stores.get(item.store_id) ?? { storeId: item.store_id, name: item.store_name, subtotalXaf: "0" };
+    current.subtotalXaf = (BigInt(current.subtotalXaf) + lineTotal).toString();
+    stores.set(item.store_id, current);
+  }
+  response.json({
+    subtotalXaf: subtotal.toString(),
+    currency: "XAF",
+    stores: [...stores.values()],
+    itemCount: items.reduce((total, item) => total + item.quantity, 0),
+    checkoutEnabled: config.checkoutEnabled && mtnPaymentConfigured(),
+  });
+}));
+
+router.post("/checkout/confirm", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const input = validate(checkoutConfirmSchema, request.body);
+  if (!config.checkoutEnabled || !mtnPaymentConfigured()) {
+    throw new HttpError(503, "La confirmation de commande est désactivée jusqu’à la configuration complète du paiement MTN Mobile Money sandbox.");
+  }
+
+  const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  const result = await inTransaction(async (client) => {
+    const existing = await client.query<{ id: string; public_number: string; request_hash: string }>(
+      "SELECT id, public_number, request_hash FROM orders WHERE account_id = $1 AND idempotency_key = $2",
+      [request.customerId, input.idempotencyKey],
+    );
+    if (existing.rows[0]) {
+      if (existing.rows[0].request_hash !== requestHash) throw new HttpError(409, "Cette clé d’idempotence correspond à une autre commande.");
+      return { id: existing.rows[0].id, publicNumber: existing.rows[0].public_number, repeated: true };
+    }
+
+    const cart = await client.query<{ id: string }>(
+      "SELECT id FROM carts WHERE account_id = $1 AND status = 'active' FOR UPDATE",
+      [request.customerId],
+    );
+    if (!cart.rows[0]) throw new HttpError(409, "Le panier est vide.");
+    const cartId = cart.rows[0].id;
+
+    const itemResult = await client.query<CartItemRow>(
+      `SELECT ci.id, ci.inventory_item_id, v.id AS variant_id, ci.quantity,
+              p.id AS product_id, p.name AS product_name, p.price AS product_price,
+              p.description AS product_description, p.image_url AS product_image_url,
+              p.image_data IS NOT NULL AS has_image_data,
+              v.label AS variant_label, v.sku,
+              st.id AS store_id, st.name AS store_name, st.slug AS store_slug,
+              i.on_hand, i.reserved, p.is_active AS product_is_active,
+              v.is_active AS variant_is_active, st.is_public AS store_is_public,
+              (s.status = 'active') AS seller_is_active,
+              s.id AS seller_id, s.full_name AS seller_name
+         FROM cart_items ci
+         JOIN inventory_items i ON i.id = ci.inventory_item_id
+         JOIN product_variants v ON v.id = i.variant_id
+         JOIN products p ON p.id = v.product_id AND p.store_id = v.store_id
+         JOIN stores st ON st.id = v.store_id
+         JOIN sellers s ON s.id = st.seller_id
+        WHERE ci.cart_id = $1
+        ORDER BY st.id, p.name, v.label
+        FOR UPDATE OF i, ci`,
+      [cartId],
+    );
+    if (itemResult.rows.length === 0) throw new HttpError(409, "Le panier est vide.");
+
+    let subtotal = 0n;
+    const grouped = new Map<string, { sellerId: string; storeId: string; sellerName: string; storeName: string; subtotal: bigint; items: CartItemRow[] }>();
+    for (const item of itemResult.rows) {
+      const available = Math.max(0, Number(item.on_hand) - Number(item.reserved));
+      if (!item.product_is_active || !item.variant_is_active || !item.store_is_public || !item.seller_is_active || item.quantity > available) {
+        throw new HttpError(409, "Le panier contient un article devenu indisponible.");
+      }
+      const lineTotal = BigInt(item.product_price) * BigInt(item.quantity);
+      subtotal += lineTotal;
+      if (subtotal > 2147483647n) throw new HttpError(409, "Le montant total dépasse la limite XAF prise en charge.");
+      const sellerId = item.seller_id!;
+      const current = grouped.get(sellerId) ?? {
+        sellerId,
+        storeId: item.store_id,
+        sellerName: item.seller_name!,
+        storeName: item.store_name,
+        subtotal: 0n,
+        items: [],
+      };
+      current.subtotal += lineTotal;
+      current.items.push(item);
+      grouped.set(sellerId, current);
+    }
+
+    const publicNumber = `ORV-${randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`;
+    const order = await client.query<{ id: string }>(
+      `INSERT INTO orders (public_number, account_id, status, subtotal_xaf, idempotency_key, request_hash)
+       VALUES ($1, $2, 'awaiting_payment', $3, $4, $5) RETURNING id`,
+      [publicNumber, request.customerId, subtotal.toString(), input.idempotencyKey, requestHash],
+    );
+    const orderId = order.rows[0]!.id;
+
+    await client.query(
+      `INSERT INTO order_delivery_snapshots
+       (order_id, full_name, phone, address_line1, address_line2, city, region, country)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [orderId, input.delivery.fullName, input.delivery.phone, input.delivery.addressLine1,
+        input.delivery.addressLine2, input.delivery.city, input.delivery.region, input.delivery.country],
+    );
+
+    for (const group of grouped.values()) {
+      if (group.subtotal > 2147483647n) throw new HttpError(409, "Le montant d’une sous-commande dépasse la limite prise en charge.");
+      const sellerOrder = await client.query<{ id: string }>(
+        `INSERT INTO seller_orders (order_id, seller_id, store_id, status, subtotal_xaf)
+         VALUES ($1, $2, $3, 'awaiting_payment', $4) RETURNING id`,
+        [orderId, group.sellerId, group.storeId, group.subtotal.toString()],
+      );
+      const sellerOrderId = sellerOrder.rows[0]!.id;
+      for (const item of group.items) {
+        await client.query(
+          `INSERT INTO order_items
+           (seller_order_id, inventory_item_id, product_id, variant_id,
+            seller_name_snapshot, store_name_snapshot, product_name_snapshot,
+            variant_label_snapshot, sku_snapshot, unit_price_xaf, quantity, line_total_xaf)
+           VALUES ($1, $2, $3, $4,
+                   $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [sellerOrderId, item.inventory_item_id, item.product_id, item.variant_id,
+            group.sellerName, group.storeName, item.product_name, item.variant_label,
+            item.sku, item.product_price, item.quantity, (BigInt(item.product_price) * BigInt(item.quantity)).toString()],
+        );
+        const inventory = await client.query<{ on_hand: number; reserved: number }>(
+          "SELECT on_hand, reserved FROM inventory_items WHERE id = $1 FOR UPDATE",
+          [item.inventory_item_id],
+        );
+        const current = inventory.rows[0]!;
+        const beforeReserved = Number(current.reserved);
+        const quantity = item.quantity;
+        if (Number(current.on_hand) - beforeReserved < quantity) throw new HttpError(409, "La quantité demandée n’est plus disponible.");
+        await client.query(
+          "UPDATE inventory_items SET reserved = reserved + $2::integer, version = version + 1, updated_at = now() WHERE id = $1",
+          [item.inventory_item_id, quantity],
+        );
+        await client.query(
+          `INSERT INTO stock_movements
+           (inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+            on_hand_before, on_hand_after, reserved_before, reserved_after,
+            reason, actor_type, reference_type, reference_id, idempotency_key, request_hash)
+           VALUES ($1::uuid, 'reservation', 0, $2::integer, $3::integer, $3::integer, $4::integer, $4::integer + $2::integer,
+                   $5, 'system', 'order', $6::uuid, $7::uuid, $8)`,
+          [item.inventory_item_id, quantity, current.on_hand, beforeReserved,
+            "Réservation confirmée pour la commande ORIVFIDE", orderId, randomUUID(), requestHash],
+        );
+      }
+      await client.query(
+        `INSERT INTO order_status_events
+         (seller_order_id, previous_status, new_status, actor_type, actor_account_id, reason)
+         VALUES ($1, NULL, 'awaiting_payment', 'customer', $2, 'Commande créée en attente du paiement MTN Mobile Money.')`,
+        [sellerOrderId, request.customerId],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO order_status_events
+       (order_id, previous_status, new_status, actor_type, actor_account_id, reason)
+       VALUES ($1, NULL, 'awaiting_payment', 'customer', $2, 'Commande parentale créée en attente du paiement MTN Mobile Money.')`,
+      [orderId, request.customerId],
+    );
+    await client.query("UPDATE carts SET status = 'converted', updated_at = now() WHERE id = $1", [cartId]);
+    return { id: orderId, publicNumber, repeated: false };
+  });
+
+  response.status(result.repeated ? 200 : 201).json({
+    order: { id: result.id, publicNumber: result.publicNumber },
+    message: result.repeated ? "Commande déjà créée en attente du paiement." : "Commande créée, stock réservé, paiement à finaliser.",
+  });
+}));
+
+router.post("/checkout/payment/mtn/initiate", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const input = validate(mtnPaymentInitiateSchema, request.body);
+  if (!config.checkoutEnabled || !mtnPaymentConfigured()) {
+    throw new HttpError(503, "Le paiement MTN Mobile Money sandbox n’est pas configuré.");
+  }
+  const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+
+  const result = await inTransaction(async (client) => {
+    const order = await client.query<{ id: string; account_id: string; public_number: string; status: string; subtotal_xaf: number }>(
+      "SELECT id, account_id, public_number, status, subtotal_xaf FROM orders WHERE id = $1 FOR UPDATE",
+      [input.orderId],
+    );
+    const found = order.rows[0];
+    if (!found || found.account_id !== request.customerId) throw new HttpError(404, "Commande introuvable.");
+    if (found.status !== "awaiting_payment") throw new HttpError(409, "Cette commande n’attend plus un paiement MTN Mobile Money.");
+
+    const existing = await client.query<{ id: string; provider_reference: string; status: string; provider_status: string | null; request_hash: string }>(
+      "SELECT id, provider_reference::text AS provider_reference, status, provider_status, request_hash FROM payments WHERE order_id = $1",
+      [input.orderId],
+    );
+    const payment = existing.rows[0];
+    if (payment) {
+      if (payment.request_hash !== requestHash) throw new HttpError(409, "Cette clé correspond à une autre demande de paiement.");
+      return { id: payment.id, referenceId: payment.provider_reference, status: payment.status, publicNumber: found.public_number, amountXaf: found.subtotal_xaf, requestToProvider: payment.status === "pending" && payment.provider_status === null };
+    }
+
+    const referenceId = randomUUID();
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO payments
+       (order_id, provider, provider_reference, status, amount_xaf, payer_phone, idempotency_key, request_hash)
+       VALUES ($1, 'mtn_momo', $2, 'pending', $3, $4, $5, $6) RETURNING id`,
+      [input.orderId, referenceId, found.subtotal_xaf, input.payerPhone, input.idempotencyKey, requestHash],
+    );
+    return { id: inserted.rows[0]!.id, referenceId, status: "pending", publicNumber: found.public_number, amountXaf: found.subtotal_xaf, requestToProvider: true };
+  });
+
+  if (result.requestToProvider) await requestMtnPayment({
+    referenceId: result.referenceId,
+    amountXaf: result.amountXaf,
+    payerPhone: input.payerPhone,
+    externalId: result.publicNumber,
+    payerMessage: `Paiement commande ${result.publicNumber}`,
+  });
+
+  response.status(202).json({
+    payment: { id: result.id, referenceId: result.referenceId, status: result.status, provider: "mtn_momo" },
+    message: "Demande de paiement MTN Mobile Money envoyée. Interrogez le statut jusqu’à confirmation.",
+  });
+}));
+
+router.get("/checkout/payment/mtn/:orderId/status", requireCustomer, requireActiveCustomer, asyncHandler(async (request, response) => {
+  const { orderId } = validate(z.object({ orderId: z.string().uuid() }), request.params);
+  const payment = await queryOne<{ id: string; provider_reference: string; status: string }>(
+    `SELECT p.id, p.provider_reference::text AS provider_reference, p.status
+       FROM payments p JOIN orders o ON o.id = p.order_id
+      WHERE p.order_id = $1 AND o.account_id = $2`,
+    [orderId, request.customerId],
+  );
+  if (!payment) throw new HttpError(404, "Paiement introuvable.");
+  const providerStatus = await getMtnPaymentStatus(payment.provider_reference);
+
+  await inTransaction(async (client) => {
+    await client.query(
+      "UPDATE payments SET status = $2, provider_status = $3, paid_at = CASE WHEN $2 = 'successful' THEN now() ELSE paid_at END WHERE id = $1",
+      [payment.id, providerStatus, providerStatus],
+    );
+    if (providerStatus === "successful") {
+      await client.query(
+        "UPDATE orders SET status = 'awaiting_vendor_confirmation', updated_at = now() WHERE id = $1 AND status = 'awaiting_payment'",
+        [orderId],
+      );
+      await client.query(
+        "UPDATE seller_orders SET status = 'awaiting_vendor_confirmation', updated_at = now() WHERE order_id = $1 AND status = 'awaiting_payment'",
+        [orderId],
+      );
+      await client.query(
+        `INSERT INTO order_status_events
+         (order_id, previous_status, new_status, actor_type, actor_account_id, reason)
+         VALUES ($1, 'awaiting_payment', 'awaiting_vendor_confirmation', 'system', $2, 'Paiement MTN Mobile Money confirmé.')`,
+        [orderId, request.customerId],
+      );
+      return;
+    }
+
+    if (["failed", "expired", "cancelled"].includes(providerStatus)) {
+      const sellerOrders = await client.query<{ id: string }>(
+        "SELECT id FROM seller_orders WHERE order_id = $1 AND status = 'awaiting_payment'",
+        [orderId],
+      );
+      for (const sellerOrder of sellerOrders.rows) {
+        const items = await client.query<{ inventory_item_id: string; quantity: number }>(
+          "SELECT inventory_item_id, quantity FROM order_items WHERE seller_order_id = $1 AND inventory_item_id IS NOT NULL",
+          [sellerOrder.id],
+        );
+        for (const item of items.rows) {
+          const inventory = await client.query<{ on_hand: number; reserved: number }>(
+            "SELECT on_hand, reserved FROM inventory_items WHERE id = $1::uuid FOR UPDATE",
+            [item.inventory_item_id],
+          );
+          const current = inventory.rows[0];
+          if (!current || current.reserved < item.quantity) continue;
+          await client.query(
+            "UPDATE inventory_items SET reserved = reserved - $2::integer, version = version + 1, updated_at = now() WHERE id = $1::uuid",
+            [item.inventory_item_id, item.quantity],
+          );
+          await client.query(
+            `INSERT INTO stock_movements
+             (inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+              on_hand_before, on_hand_after, reserved_before, reserved_after,
+              reason, actor_type, reference_type, reference_id, idempotency_key, request_hash)
+             VALUES ($1::uuid, 'release', 0, -$2::integer, $3::integer, $3::integer,
+                     $4::integer, $4::integer - $2::integer,
+                     $5, 'system', 'order', $6::uuid, $7::uuid, $8)`,
+            [item.inventory_item_id, item.quantity, current.on_hand, current.reserved,
+              "Paiement MTN terminal : libération de la réservation", orderId, randomUUID(),
+              createHash("sha256").update(`${orderId}:${item.inventory_item_id}:${providerStatus}:payment-terminal`).digest("hex")],
+          );
+        }
+        await client.query(
+          `INSERT INTO order_status_events
+           (seller_order_id, previous_status, new_status, actor_type, reason)
+           VALUES ($1, 'awaiting_payment', 'cancelled', 'system', $2)`,
+          [sellerOrder.id, `Paiement MTN terminé avec le statut ${providerStatus}.`],
+        );
+        await client.query(
+          "UPDATE seller_orders SET status = 'cancelled', updated_at = now() WHERE id = $1 AND status = 'awaiting_payment'",
+          [sellerOrder.id],
+        );
+      }
+      await client.query(
+        "UPDATE orders SET status = 'cancelled', updated_at = now() WHERE id = $1 AND status = 'awaiting_payment'",
+        [orderId],
+      );
+      await client.query(
+        `INSERT INTO order_status_events
+         (order_id, previous_status, new_status, actor_type, actor_account_id, reason)
+         VALUES ($1, 'awaiting_payment', 'cancelled', 'system', $2, $3)`,
+        [orderId, request.customerId, `Paiement MTN terminé avec le statut ${providerStatus}.`],
+      );
+    }
+  });
+
+  response.json({ payment: { status: providerStatus, provider: "mtn_momo", referenceId: payment.provider_reference } });
+}));
+
+router.get("/seller/orders", requireSeller, asyncHandler(async (request, response) => {
+  const records = await sellerAndStore(request.sellerId!);
+  if (!records || records.seller.status !== "active") throw new HttpError(403, "Seller account is not active.");
+  const result = await pool.query<{
+    id: string; order_id: string; status: string; subtotal_xaf: number;
+    created_at: Date; updated_at: Date; public_number: string; order_status: string;
+  }>(
+    `SELECT so.id, so.order_id, so.status, so.subtotal_xaf, so.created_at, so.updated_at,
+            o.public_number, o.status AS order_status
+       FROM seller_orders so
+       JOIN orders o ON o.id = so.order_id
+      WHERE so.store_id = $1
+      ORDER BY so.created_at DESC LIMIT 100`,
+    [records.store.id],
+  );
+  response.json({ orders: result.rows.map((row) => ({
+    id: row.id,
+    orderId: row.order_id,
+    publicNumber: row.public_number,
+    status: row.status,
+    orderStatus: row.order_status,
+    subtotalXaf: Number(row.subtotal_xaf),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  })) });
+}));
+
+router.get("/seller/orders/:sellerOrderId", requireSeller, asyncHandler(async (request, response) => {
+  const { sellerOrderId } = validate(z.object({ sellerOrderId: z.string().uuid() }), request.params);
+  const records = await sellerAndStore(request.sellerId!);
+  if (!records) throw new HttpError(404, "Seller account not found.");
+  if (records.seller.status !== "active") throw new HttpError(403, "Seller account is not active.");
+  const sellerOrder = await queryOne<{
+    id: string; order_id: string; status: string; subtotal_xaf: number; created_at: Date; updated_at: Date;
+    public_number: string; customer_name: string;
+  }>(
+    `SELECT so.id, so.order_id, so.status, so.subtotal_xaf, so.created_at, so.updated_at,
+            o.public_number, a.full_name AS customer_name
+       FROM seller_orders so JOIN orders o ON o.id = so.order_id JOIN accounts a ON a.id = o.account_id
+      WHERE so.id = $1 AND so.store_id = $2`,
+    [sellerOrderId, records.store.id],
+  );
+  if (!sellerOrder) throw new HttpError(404, "Sous-commande introuvable.");
+  const [items, events] = await Promise.all([
+    pool.query<{ id: string; product_name_snapshot: string; variant_label_snapshot: string; sku_snapshot: string | null; unit_price_xaf: number; quantity: number; line_total_xaf: number }>(
+      `SELECT id, product_name_snapshot, variant_label_snapshot, sku_snapshot, unit_price_xaf, quantity, line_total_xaf
+         FROM order_items WHERE seller_order_id = $1 ORDER BY product_name_snapshot`, [sellerOrder.id],
+    ),
+    pool.query<{ id: string; previous_status: string | null; new_status: string; actor_type: string; reason: string; created_at: Date }>(
+      `SELECT id, previous_status, new_status, actor_type, reason, created_at
+         FROM order_status_events WHERE seller_order_id = $1
+         ORDER BY created_at DESC`, [sellerOrder.id],
+    ),
+  ]);
+  response.json({ order: {
+    id: sellerOrder.id,
+    orderId: sellerOrder.order_id,
+    publicNumber: sellerOrder.public_number,
+    status: sellerOrder.status,
+    subtotalXaf: Number(sellerOrder.subtotal_xaf),
+    customerName: sellerOrder.customer_name,
+    createdAt: sellerOrder.created_at.toISOString(),
+    updatedAt: sellerOrder.updated_at.toISOString(),
+    items: items.rows.map((item) => ({ id: item.id, productName: item.product_name_snapshot, variantLabel: item.variant_label_snapshot, sku: item.sku_snapshot, unitPriceXaf: Number(item.unit_price_xaf), quantity: Number(item.quantity), lineTotalXaf: Number(item.line_total_xaf) })),
+    events: events.rows.map((event) => ({ id: event.id, previousStatus: event.previous_status, newStatus: event.new_status, actorType: event.actor_type, reason: event.reason, createdAt: event.created_at.toISOString() })),
+  } });
+}));
+
+router.patch("/seller/orders/:sellerOrderId/status", requireSeller, asyncHandler(async (request, response) => {
+  const { sellerOrderId } = validate(z.object({ sellerOrderId: z.string().uuid() }), request.params);
+  const input = validate(sellerOrderStatusSchema, request.body);
+  const records = await sellerAndStore(request.sellerId!);
+  if (!records || records.seller.status !== "active") throw new HttpError(403, "Seller account is not active.");
+
+  await inTransaction(async (client) => {
+    const sellerOrder = await client.query<{ id: string; order_id: string; status: string }>(
+      `SELECT id, order_id, status FROM seller_orders WHERE id = $1 AND store_id = $2 FOR UPDATE`,
+      [sellerOrderId, records.store.id],
+    );
+    if (!sellerOrder.rows[0]) throw new HttpError(404, "Sous-commande introuvable.");
+    const previous = sellerOrder.rows[0].status;
+    const allowed: Record<string, string[]> = {
+      awaiting_vendor_confirmation: ["confirmed", "cancelled"],
+      confirmed: ["preparing", "cancelled"],
+      preparing: ["handed_to_carrier", "cancelled"],
+      handed_to_carrier: ["in_transit", "cancelled"],
+      in_transit: ["delivered", "delivery_failed", "returned", "disputed"],
+      delivered: [], cancelled: [], delivery_failed: ["returned", "disputed"], returned: ["disputed"], disputed: [],
+    };
+    if (previous === input.status) {
+      throw new HttpError(409, `La sous-commande est déjà au statut ${input.status}.`);
+    }
+    if (!allowed[previous]?.includes(input.status)) {
+      throw new HttpError(409, `Transition de statut non autorisée : ${previous} → ${input.status}.`);
+    }
+
+    await client.query(
+      "UPDATE seller_orders SET status = $2, updated_at = now() WHERE id = $1",
+      [sellerOrderId, input.status],
+    );
+    await client.query(
+      `INSERT INTO order_status_events
+       (seller_order_id, previous_status, new_status, actor_type, reason)
+       VALUES ($1, $2, $3, 'seller', $4)`,
+      [sellerOrderId, previous, input.status, input.reason],
+    );
+
+    if (input.status === "cancelled") {
+      const items = await client.query<{ inventory_item_id: string; quantity: number }>(
+        "SELECT inventory_item_id, quantity FROM order_items WHERE seller_order_id = $1 AND inventory_item_id IS NOT NULL",
+        [sellerOrderId],
+      );
+      for (const item of items.rows) {
+        if (!item.inventory_item_id) continue;
+        const inventory = await client.query<{ on_hand: number; reserved: number }>(
+          "SELECT on_hand, reserved FROM inventory_items WHERE id = $1 FOR UPDATE", [item.inventory_item_id],
+        );
+        const current = inventory.rows[0];
+        if (!current || current.reserved < item.quantity) throw new HttpError(409, "La réservation à annuler est déjà incohérente.");
+        await client.query(
+          "UPDATE inventory_items SET reserved = reserved - $2::integer, version = version + 1, updated_at = now() WHERE id = $1::uuid",
+          [item.inventory_item_id, item.quantity],
+        );
+        await client.query(
+          `INSERT INTO stock_movements
+           (inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+            on_hand_before, on_hand_after, reserved_before, reserved_after,
+            reason, actor_type, actor_seller_id, reference_type, reference_id, idempotency_key, request_hash)
+           VALUES ($1::uuid, 'release', 0, -$2::integer, $3::integer, $3::integer,
+                   $4::integer, $4::integer - $2::integer,
+                   $5, 'seller', $6::uuid, 'seller_order', $7::uuid, $8::uuid, $9)`,
+          [item.inventory_item_id, item.quantity, current.on_hand, current.reserved,
+            "Annulation de sous-commande : libération du stock réservé", records.seller.id, sellerOrderId, randomUUID(), createHash("sha256").update(`${sellerOrderId}:${item.inventory_item_id}:${item.quantity}:cancelled`).digest("hex")],
+        );
+      }
+    }
+
+    if (input.status === "delivered") {
+      const items = await client.query<{ inventory_item_id: string; quantity: number }>(
+        "SELECT inventory_item_id, quantity FROM order_items WHERE seller_order_id = $1 AND inventory_item_id IS NOT NULL",
+        [sellerOrderId],
+      );
+      for (const item of items.rows) {
+        const inventory = await client.query<{ on_hand: number; reserved: number }>(
+          "SELECT on_hand, reserved FROM inventory_items WHERE id = $1::uuid FOR UPDATE",
+          [item.inventory_item_id],
+        );
+        const current = inventory.rows[0];
+        if (!current || current.reserved < item.quantity || current.on_hand < item.quantity) {
+          throw new HttpError(409, "Le stock de cette sous-commande est incohérent et ne peut pas être vendu.");
+        }
+        await client.query(
+          "UPDATE inventory_items SET on_hand = on_hand - $2::integer, reserved = reserved - $2::integer, version = version + 1, updated_at = now() WHERE id = $1::uuid",
+          [item.inventory_item_id, item.quantity],
+        );
+        await client.query(
+          `INSERT INTO stock_movements
+           (inventory_item_id, movement_type, delta_on_hand, delta_reserved,
+            on_hand_before, on_hand_after, reserved_before, reserved_after,
+            reason, actor_type, actor_seller_id, reference_type, reference_id, idempotency_key, request_hash)
+           VALUES ($1::uuid, 'sale', -$2::integer, -$2::integer,
+                   $3::integer, $3::integer - $2::integer,
+                   $4::integer, $4::integer - $2::integer,
+                   $5, 'seller', $6::uuid, 'seller_order', $7::uuid, $8::uuid, $9)`,
+          [item.inventory_item_id, item.quantity, current.on_hand, current.reserved,
+            "Livraison confirmée : vente du stock réservé", records.seller.id, sellerOrderId,
+            randomUUID(), createHash("sha256").update(`${sellerOrderId}:${item.inventory_item_id}:${item.quantity}:delivered`).digest("hex")],
+        );
+      }
+    }
+
+    const statuses = await client.query<{ status: string }>(
+      "SELECT status FROM seller_orders WHERE order_id = $1", [sellerOrder.rows[0].order_id],
+    );
+    const values = statuses.rows.map((row) => row.status);
+    let parentStatus = "awaiting_vendor_confirmation";
+    if (values.length > 0 && values.every((status) => status === "delivered")) {
+      parentStatus = "delivered";
+    } else if (values.length > 0 && values.every((status) => status === "cancelled")) {
+      parentStatus = "cancelled";
+    } else if (values.includes("disputed")) {
+      parentStatus = "disputed";
+    } else if (values.includes("returned")) {
+      parentStatus = "returned";
+    } else if (values.includes("delivery_failed")) {
+      parentStatus = "delivery_failed";
+    } else if (values.includes("in_transit")) {
+      parentStatus = "in_transit";
+    } else if (values.includes("handed_to_carrier")) {
+      parentStatus = "handed_to_carrier";
+    } else if (values.includes("preparing")) {
+      parentStatus = "preparing";
+    } else if (values.some((status) => status === "confirmed")) {
+      parentStatus = "confirmed";
+    }
+    const parentBefore = await client.query<{ status: string }>(
+      "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
+      [sellerOrder.rows[0].order_id],
+    );
+    const previousParentStatus = parentBefore.rows[0]?.status ?? "awaiting_vendor_confirmation";
+    await client.query("UPDATE orders SET status = $2, updated_at = now() WHERE id = $1", [sellerOrder.rows[0].order_id, parentStatus]);
+    if (previousParentStatus !== parentStatus) {
+      await client.query(
+        `INSERT INTO order_status_events
+         (order_id, previous_status, new_status, actor_type, reason)
+         VALUES ($1, $2, $3, 'seller', $4)`,
+        [sellerOrder.rows[0].order_id, previousParentStatus, parentStatus, `Mise à jour de la sous-commande : ${input.status}.`],
+      );
+    }
+  });
+  response.json({ message: "Statut de la sous-commande mis à jour." });
 }));
 
 router.get("/seller/dashboard", requireSeller, asyncHandler(async (request, response) => {

@@ -45,6 +45,12 @@ let otherStoreId = "";
 let productId = "";
 let otherProductId = "";
 let inventoryId = "";
+let customerId = "";
+let otherCustomerId = "";
+let customerCartItemId = "";
+let orderId = "";
+let sellerOrderId = "";
+let otherSellerOrderId = "";
 
 before(async () => {
   if (!canRun || !pool) return;
@@ -98,11 +104,21 @@ before(async () => {
     fileURLToPath(new URL("../migrations/005_customer_accounts_and_cart.sql", import.meta.url)),
     "utf8",
   );
+  const ordersMigration = await readFile(
+    fileURLToPath(new URL("../migrations/006_orders_checkout.sql", import.meta.url)),
+    "utf8",
+  );
+  const paymentMigration = await readFile(
+    fileURLToPath(new URL("../migrations/007_mtn_payments.sql", import.meta.url)),
+    "utf8",
+  );
   await withTestClient(async (client) => {
     await client.query("BEGIN");
     try {
       await client.query(migration);
       await client.query(customerMigration);
+      await client.query(ordersMigration);
+      await client.query(paymentMigration);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -199,6 +215,183 @@ test(
       });
     });
 
+    await suite.test("supports isolated customer carts and enforces cart invariants", async () => {
+      await withTestClient(async (client) => {
+        customerId = randomUUID();
+        otherCustomerId = randomUUID();
+
+        await client.query(
+          `INSERT INTO accounts (id, email, full_name, password_hash, status)
+           VALUES ($1, $2, 'Customer One', 'test-hash', 'active'),
+                  ($3, $4, 'Customer Two', 'test-hash', 'active')`,
+          [customerId, `${customerId}@example.test`, otherCustomerId, `${otherCustomerId}@example.test`],
+        );
+        await client.query(
+          `INSERT INTO account_roles (account_id, role)
+           VALUES ($1, 'customer'), ($2, 'customer')`,
+          [customerId, otherCustomerId],
+        );
+        await client.query(
+          `INSERT INTO carts (account_id, status)
+           VALUES ($1, 'active'), ($2, 'active')`,
+          [customerId, otherCustomerId],
+        );
+        await client.query("UPDATE inventory_items SET on_hand = 10 WHERE id = $1", [inventoryId]);
+
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO cart_items (cart_id, inventory_item_id, quantity)
+           SELECT id, $2, 3 FROM carts WHERE account_id = $1 AND status = 'active'
+           RETURNING id`,
+          [customerId, inventoryId],
+        );
+        customerCartItemId = inserted.rows[0]!.id;
+
+        await assert.rejects(
+          client.query(
+            `INSERT INTO cart_items (cart_id, inventory_item_id, quantity)
+             SELECT id, $2, 1 FROM carts WHERE account_id = $1 AND status = 'active'`,
+            [customerId, inventoryId],
+          ),
+          { code: "23505" },
+        );
+        await assert.rejects(
+          client.query("UPDATE cart_items SET quantity = 0 WHERE id = $1", [customerCartItemId]),
+          { code: "23514" },
+        );
+
+        const otherAccountDelete = await client.query(
+          `DELETE FROM cart_items ci
+            USING carts c
+            WHERE ci.id = $1 AND ci.cart_id = c.id
+              AND c.account_id = $2 AND c.status = 'active'
+            RETURNING ci.id`,
+          [customerCartItemId, otherCustomerId],
+        );
+        assert.equal(otherAccountDelete.rowCount, 0);
+
+        const ownedCart = await client.query<{ quantity: number }>(
+          `SELECT ci.quantity
+             FROM cart_items ci
+             JOIN carts c ON c.id = ci.cart_id
+            WHERE ci.id = $1 AND c.account_id = $2 AND c.status = 'active'`,
+          [customerCartItemId, customerId],
+        );
+        assert.equal(ownedCart.rows[0]!.quantity, 3);
+      });
+    });
+
+    await suite.test("creates seller order fixtures and enforces ownership and transitions", async () => {
+      await withTestClient(async (client) => {
+        const orderCustomerId = randomUUID();
+        await client.query(
+          `INSERT INTO accounts (id, email, full_name, password_hash, status)
+           VALUES ($1, $2, 'Order Customer', 'test-hash', 'active')`,
+          [orderCustomerId, `${orderCustomerId}@example.test`],
+        );
+        await client.query("INSERT INTO account_roles (account_id, role) VALUES ($1, 'customer')", [orderCustomerId]);
+        await client.query("UPDATE inventory_items SET on_hand = 5, reserved = 0 WHERE id = $1", [inventoryId]);
+
+        const order = await client.query<{ id: string }>(
+          `INSERT INTO orders (public_number, account_id, status, subtotal_xaf, idempotency_key, request_hash)
+           VALUES ($1, $2, 'awaiting_vendor_confirmation', 100, $3, repeat('c', 64)) RETURNING id`,
+          [`ORV-${randomUUID().slice(0, 8)}`, orderCustomerId, randomUUID()],
+        );
+        orderId = order.rows[0]!.id;
+        const owned = await client.query<{ id: string }>(
+          `INSERT INTO seller_orders (order_id, seller_id, store_id, status, subtotal_xaf)
+           VALUES ($1, $2, $3, 'awaiting_vendor_confirmation', 100) RETURNING id`,
+          [orderId, sellerId, storeId],
+        );
+        sellerOrderId = owned.rows[0]!.id;
+        const foreign = await client.query<{ id: string }>(
+          `INSERT INTO seller_orders (order_id, seller_id, store_id, status, subtotal_xaf)
+           VALUES ($1, $2, $3, 'awaiting_vendor_confirmation', 100) RETURNING id`,
+          [orderId, otherSellerId, otherStoreId],
+        );
+        otherSellerOrderId = foreign.rows[0]!.id;
+
+        await client.query("UPDATE inventory_items SET reserved = 2 WHERE id = $1", [inventoryId]);
+        await client.query(
+          `INSERT INTO order_items
+           (seller_order_id, inventory_item_id, product_id, variant_id, seller_name_snapshot,
+            store_name_snapshot, product_name_snapshot, variant_label_snapshot, unit_price_xaf,
+            quantity, line_total_xaf)
+           SELECT $1, $2, p.id, v.id, 'Seller One', 'Store One', p.name, v.label, 100, 2, 200
+             FROM products p JOIN product_variants v ON v.product_id = p.id AND v.is_default = true
+            WHERE p.id = $3`,
+          [sellerOrderId, inventoryId, productId],
+        );
+
+        const ownedLookup = await client.query<{ id: string }>(
+          `SELECT id FROM seller_orders WHERE id = $1 AND store_id = $2`,
+          [sellerOrderId, storeId],
+        );
+        assert.equal(ownedLookup.rowCount, 1);
+        const foreignLookup = await client.query<{ id: string }>(
+          `SELECT id FROM seller_orders WHERE id = $1 AND store_id = $2`,
+          [sellerOrderId, otherStoreId],
+        );
+        assert.equal(foreignLookup.rowCount, 0);
+
+        await client.query(
+          `INSERT INTO order_status_events
+           (seller_order_id, previous_status, new_status, actor_type, reason)
+           VALUES ($1, 'awaiting_vendor_confirmation', 'confirmed', 'seller', 'Commande confirmée pour le test')`,
+          [sellerOrderId],
+        );
+        await assert.rejects(
+          client.query(
+            "UPDATE order_status_events SET reason = 'modification interdite' WHERE seller_order_id = $1",
+            [sellerOrderId],
+          ),
+          /append-only/,
+        );
+      });
+    });
+
+    await suite.test("releases reservations only when seller cancellation is valid", async () => {
+      await withTestClient(async (client) => {
+        await client.query("BEGIN");
+        try {
+          const current = await client.query<{ status: string }>(
+            "SELECT status FROM seller_orders WHERE id = $1 AND store_id = $2 FOR UPDATE",
+            [sellerOrderId, storeId],
+          );
+          assert.equal(current.rows[0]!.status, "awaiting_vendor_confirmation");
+          await client.query(
+            "UPDATE inventory_items SET reserved = reserved - 2, version = version + 1 WHERE id = $1",
+            [inventoryId],
+          );
+          await client.query(
+            "UPDATE seller_orders SET status = 'cancelled', updated_at = now() WHERE id = $1",
+            [sellerOrderId],
+          );
+          await client.query(
+            `INSERT INTO order_status_events
+             (seller_order_id, previous_status, new_status, actor_type, reason)
+             VALUES ($1, 'awaiting_vendor_confirmation', 'cancelled', 'seller', 'Annulation validée par le vendeur')`,
+            [sellerOrderId],
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        }
+      });
+
+      await withTestClient(async (client) => {
+        const finalState = await client.query<{ reserved: number }>(
+          "SELECT reserved FROM inventory_items WHERE id = $1",
+          [inventoryId],
+        );
+        assert.equal(finalState.rows[0]!.reserved, 0);
+        await assert.rejects(
+          client.query("DELETE FROM order_status_events WHERE seller_order_id = $1", [sellerOrderId]),
+          /append-only/,
+        );
+      });
+    });
+
     await suite.test("prevents cross-seller inventory lookup and negative stock", async () => {
       await withTestClient(async (client) => {
         const ownership = await client.query(
@@ -216,7 +409,7 @@ test(
           { code: "23514" },
         );
         await assert.rejects(
-          client.query("UPDATE inventory_items SET reserved = 1 WHERE id = $1", [inventoryId]),
+          client.query("UPDATE inventory_items SET reserved = 11 WHERE id = $1", [inventoryId]),
           { code: "23514" },
         );
       });
@@ -224,7 +417,7 @@ test(
 
     await suite.test("serializes concurrent removal of the last unit", async () => {
       await withTestClient(async (client) => {
-        await client.query("UPDATE inventory_items SET on_hand = 1 WHERE id = $1", [inventoryId]);
+        await client.query("UPDATE inventory_items SET on_hand = 1, reserved = 0 WHERE id = $1", [inventoryId]);
         await client.query(
           `INSERT INTO stock_movements (
              inventory_item_id, movement_type, delta_on_hand, delta_reserved,
@@ -246,14 +439,21 @@ test(
               [inventoryId],
             );
             const current = selected.rows[0]!;
-            if (Number(current.on_hand) - 1 < Number(current.reserved)) {
+            if (Number(current.on_hand) < 1 || Number(current.on_hand) - 1 < Number(current.reserved)) {
               await client.query("ROLLBACK");
               return false;
             }
-            await client.query(
-              "UPDATE inventory_items SET on_hand = on_hand - 1, version = version + 1 WHERE id = $1",
+            const updated = await client.query<{ on_hand: number }>(
+              `UPDATE inventory_items
+                  SET on_hand = on_hand - 1, version = version + 1
+                WHERE id = $1 AND on_hand >= 1 AND on_hand - 1 >= reserved
+                RETURNING on_hand`,
               [inventoryId],
             );
+            if (updated.rowCount !== 1) {
+              await client.query("ROLLBACK");
+              return false;
+            }
             await client.query(
               `INSERT INTO stock_movements (
                  inventory_item_id, movement_type, delta_on_hand, delta_reserved,

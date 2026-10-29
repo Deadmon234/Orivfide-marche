@@ -2,7 +2,7 @@
 
 **Version :** 0.2 — conception et premier incrément  
 **Date :** 23 octobre 2026  
-**Statut :** comptes et panier par e-mail/mot de passe; commande non implémentée
+**Statut :** comptes, panier et modèle checkout/commande implémentés côté code; confirmation désactivée par défaut
 **Dépendances :** [Architecture et décisions des phases](./phase-2-architecture-et-modele-de-donnees.md), [Conception du stock phase 3](./phase-3-conception-stock.md)
 
 > La migration `005_customer_accounts_and_cart.sql` et le parcours compte-panier ont été appliqués/testés manuellement sur le déploiement Neon/Vercel le 23 octobre 2026. L’accès client se fait par adresse e-mail et mot de passe; aucune vérification WhatsApp n’est requise ou active. Aucune commande, réservation, confirmation, livraison ou paiement n’est implémenté.

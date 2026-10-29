@@ -1,5 +1,6 @@
 .env
 .env.*
+.env.txt
 !.env.example
 node_modules/
 dist/

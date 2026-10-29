@@ -75,6 +75,46 @@ export type CustomerCart = {
   currency: "XAF";
 };
 
+export type CustomerOrderSummary = {
+  id: string;
+  publicNumber: string;
+  status: string;
+  subtotalXaf: number;
+  currency: "XAF";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CustomerOrder = CustomerOrderSummary & {
+  sellerOrders: Array<{
+    id: string;
+    status: string;
+    subtotalXaf: number;
+    deliveryXaf: number | null;
+    store: { name: string; slug: string };
+    createdAt: string;
+    updatedAt: string;
+    items: Array<{
+      id: string;
+      productName: string;
+      variantLabel: string;
+      sku: string | null;
+      unitPriceXaf: number;
+      quantity: number;
+      lineTotalXaf: number;
+    }>;
+  }>;
+  events: Array<{
+    id: string;
+    sellerOrderId: string | null;
+    previousStatus: string | null;
+    newStatus: string;
+    actorType: string;
+    reason: string;
+    createdAt: string;
+  }>;
+};
+
 export type SellerInventoryItem = {
   id: string;
   variantId: string;
@@ -109,6 +149,38 @@ export type SellerDashboard = {
   seller: SellerAccount;
   store: SellerStore;
   products: SellerProduct[];
+};
+
+export type SellerOrderSummary = {
+  id: string;
+  orderId: string;
+  publicNumber: string;
+  status: string;
+  orderStatus: string;
+  subtotalXaf: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SellerOrder = SellerOrderSummary & {
+  customerName: string;
+  items: Array<{
+    id: string;
+    productName: string;
+    variantLabel: string;
+    sku: string | null;
+    unitPriceXaf: number;
+    quantity: number;
+    lineTotalXaf: number;
+  }>;
+  events: Array<{
+    id: string;
+    previousStatus: string | null;
+    newStatus: string;
+    actorType: string;
+    reason: string;
+    createdAt: string;
+  }>;
 };
 
 export type PublicStore = {
@@ -269,6 +341,14 @@ export async function customerApi<T>(
   return parseResponse<T>(response);
 }
 
+export async function getCustomerOrders(): Promise<{ orders: CustomerOrderSummary[] }> {
+  return customerApi<{ orders: CustomerOrderSummary[] }>("/api/customer/orders");
+}
+
+export async function getCustomerOrder(orderId: string): Promise<{ order: CustomerOrder }> {
+  return customerApi<{ order: CustomerOrder }>(`/api/customer/orders/${encodeURIComponent(orderId)}`);
+}
+
 export async function publicSellerApi<T>(path: string): Promise<T> {
   let response: Response;
   try {
@@ -410,6 +490,14 @@ export async function getSellerInventory() {
   return sellerApi<{ inventory: SellerInventoryItem[]; nextCursor: string | null }>(
     "/api/seller/inventory",
   );
+}
+
+export async function getSellerOrders() {
+  return sellerApi<{ orders: SellerOrderSummary[] }>("/api/seller/orders");
+}
+
+export async function getSellerOrder(sellerOrderId: string) {
+  return sellerApi<{ order: SellerOrder }>(`/api/seller/orders/${sellerOrderId}`);
 }
 
 export async function getAdminSellers() {

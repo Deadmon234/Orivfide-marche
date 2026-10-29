@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
@@ -29,10 +30,46 @@ const customerCredentialsSchema = z.object({
   ),
 });
 
+const pendingCartItemSchema = z.object({
+  inventoryItemId: z.string().uuid(),
+  quantity: z.coerce.number().int().min(1).max(1_000_000),
+});
+
+function readPendingCartItem(formData: FormData) {
+  const inventoryItemId = readText(formData, "pendingInventoryItemId");
+  const quantity = readText(formData, "pendingQuantity");
+  if (!inventoryItemId && !quantity) return { valid: true as const, item: undefined };
+
+  const parsed = pendingCartItemSchema.safeParse({ inventoryItemId, quantity });
+  return parsed.success
+    ? { valid: true as const, item: parsed.data }
+    : { valid: false as const, item: undefined };
+}
+
+async function finishCustomerSignIn(
+  pendingItem?: z.infer<typeof pendingCartItemSchema>,
+): Promise<never> {
+  if (!pendingItem) redirect("/panier");
+
+  try {
+    await customerApi("/api/customer/cart/items", {
+      method: "POST",
+      body: JSON.stringify(pendingItem),
+    });
+  } catch (error) {
+    console.error("Adding pending customer cart item failed", error);
+    redirect(`/panier?ajout=${error instanceof SellerApiError && [404, 409].includes(error.status) ? "indisponible" : "erreur"}`);
+  }
+  redirect("/panier?ajoute=oui");
+}
+
 export async function registerCustomer(
   _previousState: CustomerFormState,
   formData: FormData,
 ): Promise<CustomerFormState> {
+  const pendingCartItem = readPendingCartItem(formData);
+  if (!pendingCartItem.valid) return formError("Le produit à ajouter au panier n’est plus valide. Retournez à la boutique.");
+
   const parsed = z.object({
     fullName: z.string().trim().min(2).max(120),
     email: z.string().trim().email().max(254),
@@ -61,13 +98,16 @@ export async function registerCustomer(
     console.error("Customer registration request failed", error);
     return formError("La création du compte n’a pas abouti. Réessayez plus tard.");
   }
-  redirect("/panier");
+  return finishCustomerSignIn(pendingCartItem.item);
 }
 
 export async function signInCustomer(
   _previousState: CustomerFormState,
   formData: FormData,
 ): Promise<CustomerFormState> {
+  const pendingCartItem = readPendingCartItem(formData);
+  if (!pendingCartItem.valid) return formError("Le produit à ajouter au panier n’est plus valide. Retournez à la boutique.");
+
   const parsed = customerCredentialsSchema.safeParse({
     email: readText(formData, "email").toLowerCase(),
     password: formData.get("password"),
@@ -86,7 +126,7 @@ export async function signInCustomer(
     console.error("Customer login request failed", error);
     return formError("La connexion n’a pas abouti. Réessayez plus tard.");
   }
-  redirect("/panier");
+  return finishCustomerSignIn(pendingCartItem.item);
 }
 
 export async function signOutCustomer() {
@@ -114,7 +154,12 @@ export async function addCustomerCartItem(
     });
   } catch (error) {
     if (error instanceof SellerApiError && error.status === 401) {
-      redirect("/client/connexion?retour=panier");
+      const searchParams = new URLSearchParams({
+        retour: "panier",
+        inventoryItemId: parsed.data.inventoryItemId,
+        quantity: String(parsed.data.quantity),
+      });
+      redirect(`/client/connexion?${searchParams.toString()}`);
     }
     if (error instanceof SellerApiError) return formError(error.message);
     console.error("Adding customer cart item failed", error);
@@ -168,6 +213,77 @@ export async function removeCustomerCartItem(formData: FormData) {
     throw new Error("Le produit n’a pas pu être retiré du panier.");
   }
   redirect("/panier");
+}
+
+export async function confirmCustomerCheckout(
+  _previousState: CustomerFormState,
+  formData: FormData,
+): Promise<CustomerFormState> {
+  const parsed = z.object({
+    payerPhone: z.string().trim().regex(/^237[0-9]{9}$/),
+    fullName: z.string().trim().min(2).max(120),
+    phone: z.string().trim().min(6).max(32),
+    addressLine1: z.string().trim().min(5).max(250),
+    addressLine2: z.string().trim().max(250).optional().default(""),
+    city: z.string().trim().min(2).max(120),
+    region: z.string().trim().min(2).max(120),
+  }).safeParse({
+    payerPhone: readText(formData, "payerPhone"),
+    fullName: readText(formData, "fullName"),
+    phone: readText(formData, "phone"),
+    addressLine1: readText(formData, "addressLine1"),
+    addressLine2: readText(formData, "addressLine2"),
+    city: readText(formData, "city"),
+    region: readText(formData, "region"),
+  });
+  if (!parsed.success) return formError("Vérifiez l’adresse de livraison et le numéro MTN commençant par 237.");
+
+  let confirmed: { order: { id: string; publicNumber: string } };
+  try {
+    confirmed = await customerApi<{ order: { id: string; publicNumber: string } }>(
+      "/api/checkout/confirm",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          idempotencyKey: randomUUID(),
+          delivery: {
+            fullName: parsed.data.fullName,
+            phone: parsed.data.phone,
+            addressLine1: parsed.data.addressLine1,
+            addressLine2: parsed.data.addressLine2,
+            city: parsed.data.city,
+            region: parsed.data.region,
+            country: "CM",
+          },
+        }),
+      },
+    );
+    await customerApi<{ payment: { referenceId: string } }>(
+      "/api/checkout/payment/mtn/initiate",
+      {
+        method: "POST",
+        body: JSON.stringify({ orderId: confirmed.order.id, payerPhone: parsed.data.payerPhone, idempotencyKey: randomUUID() }),
+      },
+    );
+  } catch (error) {
+    if (error instanceof SellerApiError && error.status === 401) redirect("/client/connexion?retour=panier");
+    if (error instanceof SellerApiError) return formError(error.message);
+    console.error("Customer checkout and MTN initiation failed", error);
+    return formError("Le paiement n’a pas pu être initié. Réessayez plus tard.");
+  }
+  redirect(`/commandes/${confirmed!.order.id}?paiement=attente`);
+}
+
+export async function checkCustomerMtnPayment(orderId: string) {
+  try {
+    const result = await customerApi<{ payment: { status: string } }>(
+      `/api/checkout/payment/mtn/${encodeURIComponent(orderId)}/status`,
+    );
+    return result.payment.status;
+  } catch (error) {
+    if (error instanceof SellerApiError && error.status === 401) redirect("/client/connexion?retour=panier");
+    throw error;
+  }
 }
 
 export async function clearCustomerCart() {

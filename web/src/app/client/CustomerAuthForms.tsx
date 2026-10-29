@@ -10,11 +10,25 @@ import {
 
 const initialState = { message: "", success: false };
 
-export function CustomerRegisterForm() {
+type PendingCartItem = { inventoryItemId: string; quantity: string };
+
+export function CustomerRegisterForm({
+  pendingItem,
+  loginHref = "/client/connexion",
+}: {
+  pendingItem?: PendingCartItem;
+  loginHref?: string;
+}) {
   const [state, action, pending] = useActionState(registerCustomer, initialState);
   const [showPassword, setShowPassword] = useState(false);
   return (
     <form action={action} className="grid gap-4">
+      {pendingItem && (
+        <>
+          <input type="hidden" name="pendingInventoryItemId" value={pendingItem.inventoryItemId} />
+          <input type="hidden" name="pendingQuantity" value={pendingItem.quantity} />
+        </>
+      )}
       <label className="seller-field">
         Nom complet
         <input name="fullName" autoComplete="name" required minLength={2} maxLength={120} />
@@ -54,16 +68,28 @@ export function CustomerRegisterForm() {
         {pending ? "Création…" : "Créer mon compte"}
       </button>
       <p className="text-center text-sm text-orivfide-muted">
-        Déjà inscrit ? <Link className="font-semibold text-orivfide-red" href="/client/connexion">Se connecter</Link>
+        Déjà inscrit ? <Link className="font-semibold text-orivfide-red" href={loginHref}>Se connecter</Link>
       </p>
     </form>
   );
 }
 
-export function CustomerLoginForm() {
+export function CustomerLoginForm({
+  pendingItem,
+  registerHref = "/client/inscription",
+}: {
+  pendingItem?: PendingCartItem;
+  registerHref?: string;
+}) {
   const [state, action, pending] = useActionState(signInCustomer, initialState);
   return (
     <form action={action} className="grid gap-4">
+      {pendingItem && (
+        <>
+          <input type="hidden" name="pendingInventoryItemId" value={pendingItem.inventoryItemId} />
+          <input type="hidden" name="pendingQuantity" value={pendingItem.quantity} />
+        </>
+      )}
       <label className="seller-field">
         Adresse e-mail
         <input name="email" type="email" autoComplete="email" required maxLength={254} />
@@ -77,7 +103,7 @@ export function CustomerLoginForm() {
         {pending ? "Connexion…" : "Se connecter"}
       </button>
       <p className="text-center text-sm text-orivfide-muted">
-        Pas encore de compte ? <Link className="font-semibold text-orivfide-red" href="/client/inscription">Créer un compte</Link>
+        Pas encore de compte ? <Link className="font-semibold text-orivfide-red" href={registerHref}>Créer un compte</Link>
       </p>
     </form>
   );

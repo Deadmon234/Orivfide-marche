@@ -2,9 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
-import { ArrowLeft, LockKeyhole, ShoppingBag } from "lucide-react";
+import { ArrowLeft, ShoppingBag } from "lucide-react";
 import { clearCustomerCart, signOutCustomer } from "@/app/client/actions";
 import { CartItemControls } from "./CartItemControls";
+import { CheckoutPaymentForm } from "./CheckoutPaymentForm";
 import { getCustomerCart, SellerApiError } from "@/lib/seller-api";
 
 export const metadata = {
@@ -16,7 +17,7 @@ export const instant = false;
 export default async function CustomerCartPage({
   searchParams,
 }: {
-  searchParams: Promise<{ ajoute?: string }>;
+  searchParams: Promise<{ ajoute?: string; ajout?: string }>;
 }) {
   await connection();
   let cart;
@@ -43,9 +44,12 @@ export default async function CustomerCartPage({
           <Link href="/accueil" className="inline-flex items-center gap-2 text-sm font-semibold text-orivfide-red">
             <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Continuer mes achats
           </Link>
-          <form action={signOutCustomer}>
-            <button className="text-sm font-semibold text-orivfide-muted hover:text-orivfide-red">Se déconnecter</button>
-          </form>
+          <div className="flex items-center gap-4">
+            <Link href="/commandes" className="text-sm font-semibold text-orivfide-muted hover:text-orivfide-red">Mes commandes</Link>
+            <form action={signOutCustomer}>
+              <button className="text-sm font-semibold text-orivfide-muted hover:text-orivfide-red">Se déconnecter</button>
+            </form>
+          </div>
         </div>
       </header>
 
@@ -68,6 +72,16 @@ export default async function CustomerCartPage({
         {params.ajoute === "oui" && (
           <p role="status" className="mt-6 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
             Le produit a été ajouté à votre panier.
+          </p>
+        )}
+        {params.ajout === "indisponible" && (
+          <p role="alert" className="mt-6 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            Le produit n’a pas pu être ajouté car il n’est plus disponible. Vérifiez la boutique et réessayez.
+          </p>
+        )}
+        {params.ajout === "erreur" && (
+          <p role="alert" className="mt-6 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-900">
+            Le produit n’a pas pu être ajouté au panier. Réessayez depuis sa boutique.
           </p>
         )}
 
@@ -142,12 +156,7 @@ export default async function CustomerCartPage({
               <p className="mt-4 text-xs leading-5 text-orivfide-muted">
                 Estimation hors livraison. Les frais et modalités seront affichés avant qu’une commande soit disponible.
               </p>
-              <button disabled className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-zinc-200 px-5 text-sm font-semibold text-zinc-600">
-                <LockKeyhole className="h-4 w-4" aria-hidden="true" /> Commande bientôt disponible
-              </button>
-              <p className="mt-3 text-center text-xs leading-5 text-orivfide-muted">
-                Aucun paiement ni commande n’est effectué depuis cette page.
-              </p>
+              <CheckoutPaymentForm />
             </aside>
           </div>
         )}

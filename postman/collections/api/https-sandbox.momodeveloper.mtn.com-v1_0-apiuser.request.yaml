@@ -1,0 +1,17 @@
+$kind: http-request
+name: https://sandbox.momodeveloper.mtn.com/v1_0/apiuser
+description: ""
+url: https://sandbox.momodeveloper.mtn.com/v1_0/apiuser
+method: POST
+headers:
+  X-Reference-Id: 5120f39e-4abb-4185-9a72-ed5c29e90c56
+  Ocp-Apim-Subscription-Key: 1f103fdb920b40699ec9e1435fb12c17
+  Content-Type: application/json
+body:
+  type: json
+  content: "{\r
+
+    \  \"providerCallbackHost\": \"orivfide-marche.vercel.app\"\r
+
+    }"
+order: 1000

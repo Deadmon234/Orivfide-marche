@@ -402,6 +402,31 @@ export async function getSellerInventoryPage(
   }
 }
 
+export async function updateSellerOrderStatus(
+  formData: FormData,
+): Promise<void> {
+  const sellerOrderId = readText(formData, "sellerOrderId");
+  const status = readText(formData, "status");
+  const reason = readText(formData, "reason") || "Mise à jour validée par le vendeur.";
+  if (!z.string().uuid().safeParse(sellerOrderId).success) {
+    throw new Error("Identifiant de sous-commande invalide.");
+  }
+  if (!z.enum(["confirmed", "preparing", "handed_to_carrier", "in_transit", "delivered", "cancelled", "delivery_failed", "returned", "disputed"]).safeParse(status).success) {
+    throw new Error("Statut de sous-commande invalide.");
+  }
+  try {
+    await sellerApi(`/api/seller/orders/${sellerOrderId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, reason }),
+    });
+  } catch (error) {
+    if (error instanceof SellerApiError) throw new Error(error.message);
+    console.error("Seller order status update failed", error);
+    throw new Error("Le statut n’a pas pu être mis à jour. Réessayez.");
+  }
+  redirect(`/vendeur/dashboard/commandes/${sellerOrderId}?statut=modifie`);
+}
+
 export async function getSellerStockMovements(
   inventoryItemId: string,
   cursor?: string,

@@ -737,6 +737,43 @@ section article:focus-within,
   color: white;
 }
 
+.seller-mobile-quick-nav {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  border-top: 1px solid rgb(36 21 24 / 6%);
+  padding: 0.45rem 1rem 0.55rem;
+  scrollbar-width: none;
+}
+
+.seller-mobile-quick-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.seller-mobile-quick-link {
+  display: inline-flex;
+  min-height: 2.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  padding: 0.5rem 0.75rem;
+  color: #65585b;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+.seller-mobile-quick-link-active {
+  background: #fbebed;
+  color: var(--orivfide-red);
+}
+
+.seller-mobile-quick-link:focus-visible {
+  outline: 2px solid var(--orivfide-red);
+  outline-offset: 2px;
+}
+
 .seller-auth-page {
   min-height: 100vh;
   background: #fbf8f7;

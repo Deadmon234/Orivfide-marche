@@ -8,7 +8,19 @@ export const metadata = {
 };
 export const instant = false;
 
-export default function CustomerRegistrationPage() {
+export default async function CustomerRegistrationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ inventoryItemId?: string; quantity?: string }>;
+}) {
+  const params = await searchParams;
+  const pendingItem = params.inventoryItemId && params.quantity
+    ? { inventoryItemId: params.inventoryItemId, quantity: params.quantity }
+    : undefined;
+  const loginParams = pendingItem
+    ? new URLSearchParams(pendingItem).toString()
+    : "";
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf7f6] px-5 py-10">
       <section className="w-full max-w-md rounded-3xl border border-black/5 bg-white p-6 shadow-sm sm:p-9">
@@ -20,7 +32,12 @@ export default function CustomerRegistrationPage() {
         <p className="mt-3 rounded-xl bg-[#faf7f6] px-4 py-3 text-sm leading-6 text-orivfide-muted">
           Une adresse e-mail ne peut être associée qu’à un seul compte. Si vous avez déjà un compte, connectez-vous avec votre adresse e-mail et votre mot de passe.
         </p>
-        <div className="mt-7"><CustomerRegisterForm /></div>
+        <div className="mt-7">
+          <CustomerRegisterForm
+            pendingItem={pendingItem}
+            loginHref={loginParams ? `/client/connexion?${loginParams}` : "/client/connexion"}
+          />
+        </div>
       </section>
     </main>
   );

@@ -1,0 +1,13 @@
+$kind: http-request
+name: https://sandbox.momodeveloper.mtn.com/v1_0/apiuser/5120f39e-4abb-4185-9a72-ed5c29e90c56/apikey
+description: ""
+url: https://sandbox.momodeveloper.mtn.com/v1_0/apiuser/5120f39e-4abb-4185-9a72-ed5c29e90c56/apikey?Ocp-Apim-Subscription-Key=1f103fdb920b40699ec9e1435fb12c17
+method: POST
+headers:
+  Ocp-Apim-Subscription-Key: 1f103fdb920b40699ec9e1435fb12c17
+queryParams:
+  Ocp-Apim-Subscription-Key: 1f103fdb920b40699ec9e1435fb12c17
+body:
+  type: json
+  content: ""
+order: 2000
